@@ -423,14 +423,25 @@ function updateFox(e, dt, spawnList) {
 function updateHawk(e, dt, spawnList) {
   e.energy -= 0.18 * dt;
 
+  // A hawk can only take 1-2 kills per dive, then must climb back up
+  // (huntCooldown) before it is allowed to strike again.
+  if (e.diveCap === undefined) { e.diveCap = Math.random() < 0.5 ? 1 : 2; e.diveKills = 0; e.huntCooldown = 0; }
+  if (e.huntCooldown > 0) e.huntCooldown -= dt;
+
   const preyK = findNearest(e.x, e.y, 14, (o) => (o.type === 'rabbit' || o.type === 'fox'));
   if (preyK >= 0) {
     const p = entities[preyK];
     const d = Math.hypot(p.x - e.x, p.y - e.y);
     if (d < 0.9) {
-      if (Math.random() < 0.25) {
+      if (e.huntCooldown <= 0 && Math.random() < 0.25) {
         entities[preyK]._dead = true;
         e.energy += p.type === 'rabbit' ? 9 : 13;
+        e.diveKills++;
+        if (e.diveKills >= e.diveCap) {
+          e.huntCooldown = rand(4, 7);
+          e.diveKills = 0;
+          e.diveCap = Math.random() < 0.5 ? 1 : 2;
+        }
       }
     } else {
       const dx = p.x - e.x, dy = p.y - e.y;

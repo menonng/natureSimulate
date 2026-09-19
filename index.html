@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
+<title>먹이 피라미드 시뮬레이터</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <header id="topbar">
+    <h1>🌿 먹이 피라미드 시뮬레이터</h1>
+    <div id="speedControls" class="btnrow">
+      <button class="speedBtn" data-speed="0" title="일시정지">⏸</button>
+      <button class="speedBtn active" data-speed="1" title="1배속">1x</button>
+      <button class="speedBtn" data-speed="2" title="2배속">2x</button>
+      <button class="speedBtn" data-speed="4" title="4배속">4x</button>
+      <button class="speedBtn" data-speed="8" title="8배속">8x</button>
+    </div>
+  </header>
+
+  <div id="toolbar">
+    <div class="toolgroup">
+      <button class="toolBtn active" data-tool="grass" title="풀 심기">🌱<span>풀</span></button>
+      <button class="toolBtn" data-tool="land" title="맨땅 만들기">🟫<span>맨땅</span></button>
+      <button class="toolBtn" data-tool="water" title="강 그리기">💧<span>강</span></button>
+      <button class="toolBtn" data-tool="fire" title="불 지르기">🔥<span>발화</span></button>
+      <button class="toolBtn" data-tool="erase" title="생명 지우개 - 동물 지우기">🧽<span>생명 지우개</span></button>
+    </div>
+    <div class="toolgroup">
+      <button class="toolBtn" data-tool="rabbit" title="토끼 놓기">🐇<span>토끼</span></button>
+      <button class="toolBtn" data-tool="fox" title="여우 놓기">🦊<span>여우</span></button>
+      <button class="toolBtn" data-tool="hawk" title="매 놓기">🦅<span>매</span></button>
+    </div>
+    <div class="toolgroup">
+      <button id="genRiverBtn" title="새로운 강 생성">🌊 강 생성</button>
+      <button id="resetBtn" title="지형과 생명체 초기화">↺ 초기화</button>
+    </div>
+  </div>
+
+  <div id="frame">
+    <div id="canvasWrap">
+      <canvas id="terrainCanvas"></canvas>
+      <canvas id="entityCanvas"></canvas>
+    </div>
+
+    <div id="bottomPanel">
+      <div class="panelLeft">
+        <canvas id="graphCanvas"></canvas>
+        <div id="counts">
+          <span class="cnt" id="cntRabbit">🐇 0</span>
+          <span class="cnt" id="cntFox">🦊 0</span>
+          <span class="cnt" id="cntHawk">🦅 0</span>
+          <span class="cnt" id="cntGrass">🌱 0%</span>
+        </div>
+      </div>
+      <div class="panelRight">
+        <div class="fieldNotesTitle">🌿 FIELD NOTES</div>
+        <ul class="fieldNotes">
+          <li><span class="dot dotRabbit"></span>🐇 풀을 뜯고, 빠르게 번식한다.</li>
+          <li><span class="dot dotFox"></span>🦊 사냥하지 못하면 굶주린다.</li>
+          <li><span class="dot dotHawk"></span>🦅 하늘에서 급강하하여 덮친다.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div id="sliderRow">
+      <div class="sliderBox">
+        <label for="grassRateSlider">풀 재생 속도</label>
+        <input type="range" id="grassRateSlider" min="1" max="100" value="35">
+      </div>
+      <div class="sliderBox">
+        <label for="brushSizeSlider">브러시 크기</label>
+        <input type="range" id="brushSizeSlider" min="1" max="12" value="4">
+      </div>
+      <div class="sliderBox">
+        <label for="fireRateSlider">산불 확산 속도</label>
+        <input type="range" id="fireRateSlider" min="1" max="100" value="45">
+      </div>
+    </div>
+  </div>
+
+  <p id="hint">지형 위를 클릭하거나 드래그해서 선택한 도구를 사용하세요.</p>
+</div>
+<script src="script.js"></script>
+</body>
+</html>

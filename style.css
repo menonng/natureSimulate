@@ -25,15 +25,18 @@ body{
   background:#0b0a09;
   color:var(--ink);
   font-family:Georgia,'Nanum Myeongjo','Noto Serif KR',serif;
-  min-height:100vh;
+  height:100vh;
+  height:100dvh;
+  overflow:auto;
   display:flex;
+  align-items:center;
   justify-content:center;
 }
 
 #app{
-  width:100%;
-  max-width:780px;
-  padding:10px 10px 18px;
+  width:780px;
+  max-width:100%;
+  padding:10px 10px 14px;
   display:flex;
   flex-direction:column;
   gap:8px;
@@ -107,6 +110,16 @@ button.active{
   color:var(--ink-dim);
 }
 .toolBtn.active span{color:var(--gold);}
+
+/* Compact mode: applied by JS (fitToViewport) when a short browser window
+   leaves little vertical room, so the toolbar/header take up less height. */
+#app.compact .toolBtn{padding:4px 6px; min-width:32px;}
+#app.compact .toolBtn span{display:none;}
+#app.compact #toolbar{padding:4px 6px; gap:4px 6px;}
+#app.compact #topbar h1{font-size:.85rem;}
+#app.compact #bottomPanel{padding:6px 8px 2px;}
+#app.compact #sliderRow{padding:4px 10px 8px;}
+#app.compact #hint{display:none;}
 
 #frame{
   border:2px solid var(--gold-dim);

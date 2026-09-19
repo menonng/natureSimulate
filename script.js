@@ -390,7 +390,7 @@ function updateHawk(e, dt, spawnList) {
     const p = entities[preyK];
     const d = Math.hypot(p.x - e.x, p.y - e.y);
     if (d < 0.9) {
-      if (Math.random() < 0.5) {
+      if (Math.random() < 0.25) {
         entities[preyK]._dead = true;
         e.energy += p.type === 'rabbit' ? 9 : 13;
       }
@@ -476,6 +476,48 @@ const canvasWrap = document.getElementById('canvasWrap');
 terrainCanvas.width = COLS;
 terrainCanvas.height = ROWS;
 const terrainImage = tctx.createImageData(COLS, ROWS);
+
+// ---------- VIEWPORT FIT -----------------------------------------------
+// Sizes #app so the whole UI (toolbar, map, graph, sliders) fits within one
+// browser window height at 100% zoom, with no vertical scrolling needed.
+const appEl = document.getElementById('app');
+const topbarEl = document.getElementById('topbar');
+const toolbarEl = document.getElementById('toolbar');
+const frameEl = document.getElementById('frame');
+const bottomPanelEl = document.getElementById('bottomPanel');
+const sliderRowEl = document.getElementById('sliderRow');
+const hintEl = document.getElementById('hint');
+
+function fitToViewport() {
+  // The toolbar/topbar wrap differently at different widths, which changes
+  // their height, which changes the budget left for the canvas, which
+  // changes the width again -- so settle it over a few passes.
+  for (let i = 0; i < 6; i++) {
+    const currentWidth = appEl.getBoundingClientRect().width || 780;
+    appEl.classList.toggle('compact', currentWidth < 480);
+
+    const appStyle = getComputedStyle(appEl);
+    const padV = parseFloat(appStyle.paddingTop) + parseFloat(appStyle.paddingBottom);
+    const gap = parseFloat(appStyle.rowGap || appStyle.gap) || 0;
+    const frameStyle = getComputedStyle(frameEl);
+    const frameBorderV = parseFloat(frameStyle.borderTopWidth) + parseFloat(frameStyle.borderBottomWidth);
+
+    const fixedHeights = topbarEl.offsetHeight + toolbarEl.offsetHeight +
+      bottomPanelEl.offsetHeight + sliderRowEl.offsetHeight + hintEl.offsetHeight +
+      frameBorderV + padV + gap * 3; // #app has 4 direct children -> 3 gaps
+
+    const availableForCanvas = window.innerHeight - fixedHeights - 6; // small safety margin
+    const canvasHeight = Math.max(160, availableForCanvas);
+    const widthFromHeight = canvasHeight * (COLS / ROWS);
+
+    const maxWidth = Math.min(window.innerWidth - 20, 1000);
+    const finalWidth = Math.max(280, Math.min(widthFromHeight, maxWidth));
+
+    if (Math.abs(finalWidth - appEl.getBoundingClientRect().width) < 0.5) { appEl.style.width = finalWidth + 'px'; break; }
+    appEl.style.width = finalWidth + 'px';
+  }
+}
+window.addEventListener('resize', fitToViewport);
 
 function resizeEntityCanvas() {
   const rect = canvasWrap.getBoundingClientRect();
@@ -739,6 +781,7 @@ document.addEventListener('visibilitychange', () => {
 // ---------- INIT -----------------------------------------------------
 function init() {
   regenerateWorld();
+  fitToViewport();
   resizeEntityCanvas();
   resizeGraph();
   bindUI();

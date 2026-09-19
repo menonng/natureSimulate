@@ -463,33 +463,33 @@ function updateRabbit(e, dt, spawnList) {
 }
 
 function updateFox(e, dt, spawnList) {
-  e.energy -= 0.26 * dt; // buffed: leaner metabolism
+  e.energy -= 0.38 * dt; // nerfed: hungrier
   const i = cellAt(e.x, e.y);
   if (cellType[i] === 2 && Math.random() < 0.4 * dt * 10) return false;
   if (tryDrown(i, dt)) return false;
   trySeedFromAnimal(i, 0.12 * dt);
 
-  const preyK = findNearest(e.x, e.y, 12, (o) => o.type === 'rabbit'); // buffed: wider hunt radius
+  const preyK = findNearest(e.x, e.y, 8, (o) => o.type === 'rabbit'); // nerfed: shorter hunt radius
   if (preyK >= 0) {
     const p = entities[preyK];
     const d = Math.hypot(p.x - e.x, p.y - e.y);
     if (d < 0.8) {
       entities[preyK]._dead = true;
-      e.energy += 8; // buffed: more energy per catch
+      e.energy += 5; // nerfed: less energy per catch
       playCaptureSound();
     } else {
       const dx = p.x - e.x, dy = p.y - e.y;
-      e.vx = lerp(e.vx, (dx / d) * 3.1, 0.5); // buffed: faster chase
-      e.vy = lerp(e.vy, (dy / d) * 3.1, 0.5);
+      e.vx = lerp(e.vx, (dx / d) * 2.3, 0.5); // nerfed: slower chase
+      e.vy = lerp(e.vy, (dy / d) * 2.3, 0.5);
       tryMove(e, dt);
     }
   } else {
     steerRandom(e, 1.3, dt);
   }
 
-  if (e.energy > 11 && e.cooldown <= 0 && countType('fox') < FOX_CAP) { // buffed: breeds sooner
-    e.energy -= 5;
-    e.cooldown = 7;
+  if (e.energy > 15 && e.cooldown <= 0 && countType('fox') < FOX_CAP) { // nerfed: breeds later
+    e.energy -= 7;
+    e.cooldown = 10;
     spawnList.push(makeChild(e, 'fox'));
     playBreedSound();
   }

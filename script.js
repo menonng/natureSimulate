@@ -324,19 +324,20 @@ function steerRandom(e, speed, dt) {
 function tryMove(e, dt) {
   const nx = e.x + e.vx * dt;
   const ny = e.y + e.vy * dt;
-  const isHawk = e.type === 'hawk';
   if (nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) {
     e.vx *= -1; e.vy *= -1;
     return;
   }
-  if (!isHawk) {
-    const t = cellType[cellAt(nx, ny)];
-    if (t === 1) { // water blocks land animals
-      e.vx *= -1; e.vy *= -1;
-      return;
-    }
-  }
+  // Land animals can now swim across rivers; drowning risk is handled
+  // per-tick in updateRabbit/updateFox while they're in a water cell.
   e.x = nx; e.y = ny;
+}
+
+// 20%/sec chance of drowning while a land animal is in a water cell.
+const DROWN_CHANCE_PER_SEC = 0.2;
+function tryDrown(i, dt) {
+  if (cellType[i] !== 1) return false;
+  return Math.random() < 1 - Math.pow(1 - DROWN_CHANCE_PER_SEC, dt);
 }
 
 function updateRabbit(e, dt, spawnList) {
@@ -346,6 +347,7 @@ function updateRabbit(e, dt, spawnList) {
   if (cellType[i] === 2) { // standing in fire
     if (Math.random() < 0.5 * dt * 10) return false;
   }
+  if (tryDrown(i, dt)) return false;
   if (cellType[i] === 0 && grass[i] > 0.04) {
     const eat = Math.min(grass[i], 0.35 * dt);
     grass[i] -= eat;
@@ -390,52 +392,53 @@ function updateRabbit(e, dt, spawnList) {
 }
 
 function updateFox(e, dt, spawnList) {
-  e.energy -= 0.32 * dt;
+  e.energy -= 0.26 * dt; // buffed: leaner metabolism
   const i = cellAt(e.x, e.y);
   if (cellType[i] === 2 && Math.random() < 0.4 * dt * 10) return false;
+  if (tryDrown(i, dt)) return false;
   trySeedFromAnimal(i, 0.12 * dt);
 
-  const preyK = findNearest(e.x, e.y, 10, (o) => o.type === 'rabbit');
+  const preyK = findNearest(e.x, e.y, 12, (o) => o.type === 'rabbit'); // buffed: wider hunt radius
   if (preyK >= 0) {
     const p = entities[preyK];
     const d = Math.hypot(p.x - e.x, p.y - e.y);
     if (d < 0.8) {
       entities[preyK]._dead = true;
-      e.energy += 6.5;
+      e.energy += 8; // buffed: more energy per catch
     } else {
       const dx = p.x - e.x, dy = p.y - e.y;
-      e.vx = lerp(e.vx, (dx / d) * 2.6, 0.5);
-      e.vy = lerp(e.vy, (dy / d) * 2.6, 0.5);
+      e.vx = lerp(e.vx, (dx / d) * 3.1, 0.5); // buffed: faster chase
+      e.vy = lerp(e.vy, (dy / d) * 3.1, 0.5);
       tryMove(e, dt);
     }
   } else {
     steerRandom(e, 1.3, dt);
   }
 
-  if (e.energy > 13 && e.cooldown <= 0 && countType('fox') < FOX_CAP) {
-    e.energy -= 6;
-    e.cooldown = 8;
+  if (e.energy > 11 && e.cooldown <= 0 && countType('fox') < FOX_CAP) { // buffed: breeds sooner
+    e.energy -= 5;
+    e.cooldown = 7;
     spawnList.push(makeChild(e, 'fox'));
   }
   return e.energy > 0;
 }
 
 function updateHawk(e, dt, spawnList) {
-  e.energy -= 0.18 * dt;
+  e.energy -= 0.24 * dt; // nerfed: hungrier
 
   // A hawk can only take 1-2 kills per dive, then must climb back up
   // (huntCooldown) before it is allowed to strike again.
   if (e.diveCap === undefined) { e.diveCap = Math.random() < 0.5 ? 1 : 2; e.diveKills = 0; e.huntCooldown = 0; }
   if (e.huntCooldown > 0) e.huntCooldown -= dt;
 
-  const preyK = findNearest(e.x, e.y, 14, (o) => (o.type === 'rabbit' || o.type === 'fox'));
+  const preyK = findNearest(e.x, e.y, 11, (o) => (o.type === 'rabbit' || o.type === 'fox')); // nerfed: shorter hunt radius
   if (preyK >= 0) {
     const p = entities[preyK];
     const d = Math.hypot(p.x - e.x, p.y - e.y);
     if (d < 0.9) {
       if (e.huntCooldown <= 0 && Math.random() < 0.25) {
         entities[preyK]._dead = true;
-        e.energy += p.type === 'rabbit' ? 9 : 13;
+        e.energy += p.type === 'rabbit' ? 7 : 10; // nerfed: less energy per catch
         e.diveKills++;
         if (e.diveKills >= e.diveCap) {
           e.huntCooldown = rand(28, 49);
@@ -445,8 +448,8 @@ function updateHawk(e, dt, spawnList) {
       }
     } else {
       const dx = p.x - e.x, dy = p.y - e.y;
-      e.vx = lerp(e.vx, (dx / d) * 3.6, 0.5);
-      e.vy = lerp(e.vy, (dy / d) * 3.6, 0.5);
+      e.vx = lerp(e.vx, (dx / d) * 3.0, 0.5); // nerfed: slower chase
+      e.vy = lerp(e.vy, (dy / d) * 3.0, 0.5);
     }
   } else {
     e.vx += rand(-0.3, 0.3);
@@ -458,9 +461,9 @@ function updateHawk(e, dt, spawnList) {
   tryMove(e, dt);
   trySeedFromAnimal(cellAt(e.x, e.y), 0.006 * dt); // a dropped seed, very rare
 
-  if (e.energy > 22 && e.cooldown <= 0 && countType('hawk') < HAWK_CAP) {
-    e.energy -= 12;
-    e.cooldown = 20;
+  if (e.energy > 26 && e.cooldown <= 0 && countType('hawk') < HAWK_CAP) { // nerfed: breeds later
+    e.energy -= 14;
+    e.cooldown = 24;
     spawnList.push(makeChild(e, 'hawk'));
   }
   return e.energy > 0;

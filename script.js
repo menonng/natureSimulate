@@ -438,7 +438,7 @@ function updateHawk(e, dt, spawnList) {
         e.energy += p.type === 'rabbit' ? 9 : 13;
         e.diveKills++;
         if (e.diveKills >= e.diveCap) {
-          e.huntCooldown = rand(4, 7);
+          e.huntCooldown = rand(28, 49);
           e.diveKills = 0;
           e.diveCap = Math.random() < 0.5 ? 1 : 2;
         }

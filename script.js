@@ -207,11 +207,22 @@ function findNearest(x, y, radius, predicate) {
 }
 
 // ---------- SIMULATION TICK -----------------------------------------------
+// Bare ground (including recovering burn scars) never sprouts grass on its
+// own. A cell only germinates (grass 0 -> a small sprout) when a seed
+// actually arrives: wind carrying it from nearby grass, a land animal
+// tracking it in, or - very rarely - a bird dropping one in flight.
+// Once a sprout exists it is free to mature/thicken over time.
+const SEED_SPROUT = 0.05;
+
 function tickTerrain(dt) {
   for (let i = 0; i < cellType.length; i++) {
     const t = cellType[i];
     if (t === 0) {
-      if (grass[i] < 1) grass[i] = clamp(grass[i] + params.grassRegrow * dt, 0, 1);
+      if (grass[i] > 0) {
+        if (grass[i] < 1) grass[i] = clamp(grass[i] + params.grassRegrow * dt, 0, 1);
+      } else {
+        tryWindGerminate(i, dt);
+      }
     } else if (t === 2) {
       burnTimer[i] -= dt;
       if (burnTimer[i] <= 0) {
@@ -227,6 +238,30 @@ function tickTerrain(dt) {
     }
   }
   spreadFire(dt);
+}
+
+function tryWindGerminate(i, dt) {
+  const x = i % COLS, y = (i / COLS) | 0;
+  let neighborGrass = 0;
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const nx = x + dx, ny = y + dy;
+      if (!inBounds(nx, ny)) continue;
+      const ni = idx(nx, ny);
+      if (cellType[ni] === 0) neighborGrass += grass[ni];
+    }
+  }
+  if (neighborGrass <= 0) return;
+  const chance = neighborGrass * params.grassRegrow * dt * 3.5;
+  if (Math.random() < chance) grass[i] = SEED_SPROUT;
+}
+
+// A land animal passing over bare ground may carry in a seed (fur, droppings).
+function trySeedFromAnimal(i, chance) {
+  if (cellType[i] === 0 && grass[i] === 0 && Math.random() < chance) {
+    grass[i] = SEED_SPROUT;
+  }
 }
 
 function spreadFire(dt) {
@@ -315,6 +350,8 @@ function updateRabbit(e, dt, spawnList) {
     const eat = Math.min(grass[i], 0.35 * dt);
     grass[i] -= eat;
     e.energy += eat * 3.2;
+  } else {
+    trySeedFromAnimal(i, 0.18 * dt);
   }
 
   // flee foxes
@@ -356,6 +393,7 @@ function updateFox(e, dt, spawnList) {
   e.energy -= 0.32 * dt;
   const i = cellAt(e.x, e.y);
   if (cellType[i] === 2 && Math.random() < 0.4 * dt * 10) return false;
+  trySeedFromAnimal(i, 0.12 * dt);
 
   const preyK = findNearest(e.x, e.y, 10, (o) => o.type === 'rabbit');
   if (preyK >= 0) {
@@ -407,6 +445,7 @@ function updateHawk(e, dt, spawnList) {
     e.vy = (e.vy / len) * 1.4;
   }
   tryMove(e, dt);
+  trySeedFromAnimal(cellAt(e.x, e.y), 0.006 * dt); // a dropped seed, very rare
 
   if (e.energy > 22 && e.cooldown <= 0 && countType('hawk') < HAWK_CAP) {
     e.energy -= 12;

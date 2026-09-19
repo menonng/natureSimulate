@@ -426,31 +426,18 @@ function updateRabbit(e, dt, spawnList) {
     trySeedFromAnimal(i, 0.18 * dt);
   }
 
-  // flee foxes
+  // flee foxes (predator awareness, not food-detection)
   const foxK = findNearest(e.x, e.y, 7, (o) => o.type === 'fox');
   if (foxK >= 0) {
     const f = entities[foxK];
     const dx = e.x - f.x, dy = e.y - f.y;
     const len = Math.hypot(dx, dy) || 1;
-    e.vx = (dx / len) * 3.4;
-    e.vy = (dy / len) * 3.4;
+    e.vx = (dx / len) * 2.4; // nerfed: slower flee
+    e.vy = (dy / len) * 2.4;
     tryMove(e, dt);
   } else {
-    // seek grass
-    let bestScore = -1, bestX = e.x, bestY = e.y;
-    for (let s = 0; s < 4; s++) {
-      const sx = clamp(e.x + rand(-4, 4), 0, COLS - 1);
-      const sy = clamp(e.y + rand(-4, 4), 0, ROWS - 1);
-      const si = cellAt(sx, sy);
-      if (cellType[si] !== 0) continue;
-      const score = grass[si] + Math.random() * 0.1;
-      if (score > bestScore) { bestScore = score; bestX = sx; bestY = sy; }
-    }
-    const dx = bestX - e.x, dy = bestY - e.y;
-    const len = Math.hypot(dx, dy) || 1;
-    e.vx = lerp(e.vx, (dx / len) * 1.6, 0.4);
-    e.vy = lerp(e.vy, (dy / len) * 1.6, 0.4);
-    tryMove(e, dt);
+    // no food-detection range: wanders randomly, only eats grass it happens to be on
+    steerRandom(e, 1.0, dt); // nerfed: slower wander speed
   }
 
   if (e.energy > 6.5 && e.cooldown <= 0 && countType('rabbit') < RABBIT_CAP) {
@@ -469,23 +456,14 @@ function updateFox(e, dt, spawnList) {
   if (tryDrown(i, dt)) return false;
   trySeedFromAnimal(i, 0.12 * dt);
 
-  const preyK = findNearest(e.x, e.y, 8, (o) => o.type === 'rabbit'); // nerfed: shorter hunt radius
+  // no food-detection range: only catches a rabbit already within striking distance
+  const preyK = findNearest(e.x, e.y, 0.8, (o) => o.type === 'rabbit');
   if (preyK >= 0) {
-    const p = entities[preyK];
-    const d = Math.hypot(p.x - e.x, p.y - e.y);
-    if (d < 0.8) {
-      entities[preyK]._dead = true;
-      e.energy += 5; // nerfed: less energy per catch
-      playCaptureSound();
-    } else {
-      const dx = p.x - e.x, dy = p.y - e.y;
-      e.vx = lerp(e.vx, (dx / d) * 2.3, 0.5); // nerfed: slower chase
-      e.vy = lerp(e.vy, (dy / d) * 2.3, 0.5);
-      tryMove(e, dt);
-    }
-  } else {
-    steerRandom(e, 1.3, dt);
+    entities[preyK]._dead = true;
+    e.energy += 5; // nerfed: less energy per catch
+    playCaptureSound();
   }
+  steerRandom(e, 1.3, dt);
 
   if (e.energy > 15 && e.cooldown <= 0 && countType('fox') < FOX_CAP) { // nerfed: breeds later
     e.energy -= 7;
@@ -504,34 +482,26 @@ function updateHawk(e, dt, spawnList) {
   if (e.diveCap === undefined) { e.diveCap = Math.random() < 0.5 ? 1 : 2; e.diveKills = 0; e.huntCooldown = 0; }
   if (e.huntCooldown > 0) e.huntCooldown -= dt;
 
-  const preyK = findNearest(e.x, e.y, 11, (o) => (o.type === 'rabbit' || o.type === 'fox')); // nerfed: shorter hunt radius
-  if (preyK >= 0) {
+  // no food-detection range: only strikes prey already within range
+  const preyK = findNearest(e.x, e.y, 0.9, (o) => (o.type === 'rabbit' || o.type === 'fox'));
+  if (preyK >= 0 && e.huntCooldown <= 0 && Math.random() < 0.25) {
     const p = entities[preyK];
-    const d = Math.hypot(p.x - e.x, p.y - e.y);
-    if (d < 0.9) {
-      if (e.huntCooldown <= 0 && Math.random() < 0.25) {
-        entities[preyK]._dead = true;
-        e.energy += p.type === 'rabbit' ? 7 : 10; // nerfed: less energy per catch
-        playCaptureSound();
-        e.diveKills++;
-        if (e.diveKills >= e.diveCap) {
-          e.huntCooldown = rand(28, 49);
-          e.diveKills = 0;
-          e.diveCap = Math.random() < 0.5 ? 1 : 2;
-        }
-      }
-    } else {
-      const dx = p.x - e.x, dy = p.y - e.y;
-      e.vx = lerp(e.vx, (dx / d) * 3.0, 0.5); // nerfed: slower chase
-      e.vy = lerp(e.vy, (dy / d) * 3.0, 0.5);
+    entities[preyK]._dead = true;
+    e.energy += p.type === 'rabbit' ? 7 : 10; // nerfed: less energy per catch
+    playCaptureSound();
+    e.diveKills++;
+    if (e.diveKills >= e.diveCap) {
+      e.huntCooldown = rand(28, 49);
+      e.diveKills = 0;
+      e.diveCap = Math.random() < 0.5 ? 1 : 2;
     }
-  } else {
-    e.vx += rand(-0.3, 0.3);
-    e.vy += rand(-0.3, 0.3);
-    const len = Math.hypot(e.vx, e.vy) || 1;
-    e.vx = (e.vx / len) * 1.4;
-    e.vy = (e.vy / len) * 1.4;
   }
+
+  e.vx += rand(-0.3, 0.3);
+  e.vy += rand(-0.3, 0.3);
+  const len = Math.hypot(e.vx, e.vy) || 1;
+  e.vx = (e.vx / len) * 1.4;
+  e.vy = (e.vy / len) * 1.4;
   tryMove(e, dt);
   trySeedFromAnimal(cellAt(e.x, e.y), 0.006 * dt); // a dropped seed, very rare
 

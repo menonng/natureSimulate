@@ -55,6 +55,12 @@ let speedMultiplier = 1;
 let simTime = 0;
 let lastFrameTime = 0;
 let accumulator = 0;
+let tickCount = 0;
+
+// Movement-trail toggles: independent per species, multi-select.
+const trailVisible = { rabbit: false, fox: false, hawk: false };
+const TRAIL_MAX_POINTS = 16;
+const TRAIL_RECORD_EVERY = 3; // ticks
 
 const history = []; // {r,f,h,g}
 const HISTORY_MAX = 160;
@@ -87,6 +93,57 @@ function smoothNoise(w, h) {
     }
   }
   return out;
+}
+
+// ---------- SOUND EFFECTS -------------------------------------------------
+// Tiny synthesized beeps (no audio files) for two events: a catch and a
+// birth. Lazily created/resumed on the first user gesture per browser
+// autoplay rules.
+let audioCtx = null;
+function ensureAudio() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+  if (!audioCtx) audioCtx = new AC();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+document.addEventListener('pointerdown', ensureAudio, { once: true });
+
+function playTone(freq, duration, type, peakGain, startDelay) {
+  const ctx = ensureAudio();
+  if (!ctx) return;
+  const t0 = ctx.currentTime + (startDelay || 0);
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t0);
+  gain.gain.setValueAtTime(0, t0);
+  gain.gain.linearRampToValueAtTime(peakGain, t0 + 0.008);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(t0);
+  osc.stop(t0 + duration + 0.02);
+}
+
+// Rate-limited so a fast-forwarded sim (many catches/births per real second)
+// doesn't turn into a wall of overlapping noise.
+let lastCaptureSound = 0, lastBreedSound = 0;
+const SOUND_MIN_GAP = 0.05; // seconds
+
+function playCaptureSound() {
+  const now = performance.now() / 1000;
+  if (now - lastCaptureSound < SOUND_MIN_GAP) return;
+  lastCaptureSound = now;
+  playTone(680, 0.09, 'square', 0.07);
+  playTone(260, 0.11, 'square', 0.05, 0.03);
+}
+
+function playBreedSound() {
+  const now = performance.now() / 1000;
+  if (now - lastBreedSound < SOUND_MIN_GAP) return;
+  lastBreedSound = now;
+  playTone(523, 0.08, 'triangle', 0.06);
+  playTone(784, 0.10, 'triangle', 0.06, 0.07);
 }
 
 // ---------- TERRAIN GENERATION -------------------------------------------
@@ -293,6 +350,8 @@ function spreadFire(dt) {
 
 function tickEntities(dt) {
   rebuildBuckets();
+  tickCount++;
+  const recordTrails = tickCount % TRAIL_RECORD_EVERY === 0;
   const next = [];
   for (const e of entities) {
     e.age += dt;
@@ -301,7 +360,18 @@ function tickEntities(dt) {
     if (e.type === 'rabbit') alive = updateRabbit(e, dt, next);
     else if (e.type === 'fox') alive = updateFox(e, dt, next);
     else alive = updateHawk(e, dt, next);
-    if (alive) next.push(e);
+    if (alive) {
+      if (trailVisible[e.type]) {
+        if (recordTrails) {
+          if (!e.trail) e.trail = [];
+          e.trail.push(e.x, e.y);
+          if (e.trail.length > TRAIL_MAX_POINTS * 2) e.trail.splice(0, 2);
+        }
+      } else if (e.trail && e.trail.length) {
+        e.trail.length = 0; // toggled off - stop showing a stale trail
+      }
+      next.push(e);
+    }
   }
   entities = next;
 }
@@ -387,6 +457,7 @@ function updateRabbit(e, dt, spawnList) {
     e.energy -= 3;
     e.cooldown = 4.5;
     spawnList.push(makeChild(e, 'rabbit'));
+    playBreedSound();
   }
   return e.energy > 0;
 }
@@ -405,6 +476,7 @@ function updateFox(e, dt, spawnList) {
     if (d < 0.8) {
       entities[preyK]._dead = true;
       e.energy += 8; // buffed: more energy per catch
+      playCaptureSound();
     } else {
       const dx = p.x - e.x, dy = p.y - e.y;
       e.vx = lerp(e.vx, (dx / d) * 3.1, 0.5); // buffed: faster chase
@@ -419,6 +491,7 @@ function updateFox(e, dt, spawnList) {
     e.energy -= 5;
     e.cooldown = 7;
     spawnList.push(makeChild(e, 'fox'));
+    playBreedSound();
   }
   return e.energy > 0;
 }
@@ -439,6 +512,7 @@ function updateHawk(e, dt, spawnList) {
       if (e.huntCooldown <= 0 && Math.random() < 0.25) {
         entities[preyK]._dead = true;
         e.energy += p.type === 'rabbit' ? 7 : 10; // nerfed: less energy per catch
+        playCaptureSound();
         e.diveKills++;
         if (e.diveKills >= e.diveCap) {
           e.huntCooldown = rand(28, 49);
@@ -465,6 +539,7 @@ function updateHawk(e, dt, spawnList) {
     e.energy -= 14;
     e.cooldown = 24;
     spawnList.push(makeChild(e, 'hawk'));
+    playBreedSound();
   }
   return e.energy > 0;
 }
@@ -623,11 +698,33 @@ function renderTerrain() {
   tctx.putImageData(terrainImage, 0, 0);
 }
 
+const TRAIL_COLORS = { rabbit: '85,187,68', fox: '255,126,0', hawk: '139,95,201' };
+
+function drawTrails(sx, sy) {
+  ectx.lineCap = 'round';
+  ectx.lineWidth = Math.max(1, Math.min(sx, sy) * 0.16);
+  for (const e of entities) {
+    if (!trailVisible[e.type] || !e.trail) continue;
+    const n = e.trail.length / 2;
+    if (n < 2) continue;
+    const color = TRAIL_COLORS[e.type];
+    for (let i = 0; i < n - 1; i++) {
+      const alpha = 0.05 + 0.5 * (i / (n - 1));
+      ectx.strokeStyle = `rgba(${color},${alpha.toFixed(2)})`;
+      ectx.beginPath();
+      ectx.moveTo(e.trail[i * 2] * sx, e.trail[i * 2 + 1] * sy);
+      ectx.lineTo(e.trail[(i + 1) * 2] * sx, e.trail[(i + 1) * 2 + 1] * sy);
+      ectx.stroke();
+    }
+  }
+}
+
 function renderEntities() {
   const w = entityCanvas.width, h = entityCanvas.height;
   ectx.clearRect(0, 0, w, h);
   const sx = w / COLS, sy = h / ROWS;
   const cellPx = Math.min(sx, sy);
+  drawTrails(sx, sy);
   ectx.textAlign = 'center';
   ectx.textBaseline = 'middle';
 
@@ -764,11 +861,21 @@ function bindPointer() {
 
 // ---------- UI BINDINGS -----------------------------------------------
 function bindUI() {
-  document.querySelectorAll('.toolBtn').forEach((btn) => {
+  document.querySelectorAll('.toolBtn:not(.trailBtn)').forEach((btn) => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('.toolBtn').forEach((b) => b.classList.remove('active'));
+      document.querySelectorAll('.toolBtn:not(.trailBtn)').forEach((b) => b.classList.remove('active'));
       btn.classList.add('active');
       currentTool = btn.dataset.tool;
+    });
+  });
+
+  // Trail toggles are independent, multi-select switches - one species at a
+  // time doesn't apply here, so each button just flips its own state.
+  document.querySelectorAll('.trailBtn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const species = btn.dataset.trail;
+      trailVisible[species] = !trailVisible[species];
+      btn.classList.toggle('active', trailVisible[species]);
     });
   });
 

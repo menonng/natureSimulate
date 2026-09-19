@@ -111,6 +111,15 @@ button.active{
 }
 .toolBtn.active span{color:var(--gold);}
 
+/* Trail toggles are independent multi-select switches (not the exclusive
+   tool-select group), so each lights up in its own species color. */
+.trailBtn[data-trail="rabbit"].active{border-color:var(--green); background:#1c2c16; box-shadow:0 0 0 1px #2f4a24 inset;}
+.trailBtn[data-trail="rabbit"].active span{color:var(--green);}
+.trailBtn[data-trail="fox"].active{border-color:var(--orange); background:#2c1c10; box-shadow:0 0 0 1px #4a2f16 inset;}
+.trailBtn[data-trail="fox"].active span{color:var(--orange);}
+.trailBtn[data-trail="hawk"].active{border-color:var(--purple-light); background:#211c2c; box-shadow:0 0 0 1px #392f4a inset;}
+.trailBtn[data-trail="hawk"].active span{color:var(--purple-light);}
+
 /* Compact mode: applied by JS (fitToViewport) when a short browser window
    leaves little vertical room, so the toolbar/header take up less height. */
 #app.compact .toolBtn{padding:4px 6px; min-width:32px;}

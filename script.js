@@ -626,10 +626,14 @@ function renderEntities() {
       ectx.beginPath();
       ectx.ellipse(cx, shadowY, size * 0.32, size * 0.11, 0, 0, Math.PI * 2);
       ectx.fill();
+      ectx.fillStyle = '#000';   // reset so the shadow's alpha doesn't bleed into the emoji glyph
+      ectx.globalAlpha = 1;
       ectx.font = `${size}px sans-serif`;
       ectx.fillText(EMOJI.hawk, cx, cy);
     } else {
       const size = cellPx * 2.1;
+      ectx.fillStyle = '#000';
+      ectx.globalAlpha = 1;
       ectx.font = `${size}px sans-serif`;
       ectx.fillText(EMOJI[e.type], cx, cy);
     }

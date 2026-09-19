@@ -5,6 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
 <title>먹이 피라미드 시뮬레이터</title>
 <link rel="stylesheet" href="style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.min.js"
+  }
+}
+</script>
 </head>
 <body>
 <button id="appSwitchBtn" title="다른 시뮬레이터로 전환">💨 유체 시뮬레이터</button>
@@ -91,24 +98,40 @@
   <p id="hint">지형 위를 클릭하거나 드래그해서 선택한 도구를 사용하세요.</p>
 </div>
 
-<div id="fluidApp" class="hidden">
-  <header id="fluidTopbar">
+<div id="fluidApp" class="simApp hidden">
+  <header class="simTopbar">
     <h1>💨 방귀 유체 시뮬레이터</h1>
     <div class="btnrow">
       <button id="fluidClearBtn" title="유체 초기화">🧹 초기화</button>
     </div>
   </header>
-  <div id="fluidFrame">
-    <div id="fluidCanvasWrap">
+  <div class="simFrame">
+    <div class="simCanvasWrap">
       <canvas id="fluidCanvas"></canvas>
       <div id="fluidChar">😐</div>
     </div>
   </div>
-  <p id="fluidHint">원 주위를 클릭해서 조준하면 그 방향으로 방귀가 나갑니다. 나비에-스토크스 방정식으로 기체 확산을 실시간 계산합니다.</p>
+  <p class="simHint">원 주위를 클릭해서 조준하면 그 방향으로 방귀가 나갑니다. 나비에-스토크스 방정식으로 기체 확산을 실시간 계산합니다.</p>
+</div>
+
+<div id="waterApp" class="simApp hidden">
+  <header class="simTopbar">
+    <h1>🌊 3D 수조 물리 시뮬레이터</h1>
+    <div class="btnrow">
+      <button id="waterClearBtn" title="수면 잔잔하게">🧹 잔잔하게</button>
+    </div>
+  </header>
+  <div class="simFrame">
+    <div class="simCanvasWrap">
+      <canvas id="waterCanvas"></canvas>
+    </div>
+  </div>
+  <p class="simHint">수조 안을 클릭하면 그 지점에 힘이 가해져 물결이 퍼집니다. 드래그로 시점을 회전하고, 스크롤로 확대/축소할 수 있습니다.</p>
 </div>
 
 <script src="script.js"></script>
 <script src="fluid.js"></script>
+<script type="module" src="water.js"></script>
 <script src="switch.js"></script>
 </body>
 </html>

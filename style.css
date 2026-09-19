@@ -32,7 +32,7 @@ body{
 
 #app{
   width:100%;
-  max-width:520px;
+  max-width:780px;
   padding:10px 10px 18px;
   display:flex;
   flex-direction:column;
@@ -122,7 +122,7 @@ button.active{
 #canvasWrap{
   position:relative;
   width:100%;
-  aspect-ratio: 90 / 118;
+  aspect-ratio: 135 / 118;
   background:#0d2a10;
 }
 #canvasWrap canvas{

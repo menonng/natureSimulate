@@ -5,7 +5,7 @@
    ============================================================ */
 
 // ---------- CONFIG ----------------------------------------------------
-const COLS = 90;
+const COLS = 135;   // 1.5x wider than the original 90 — the box grows sideways, not taller
 const ROWS = 118;
 const TICK_DT = 1 / 20;           // simulation seconds per tick (base)
 const MAX_TICKS_PER_FRAME = 40;
@@ -17,9 +17,9 @@ const BUCKET_ROWS = Math.ceil(ROWS / BUCKET_SIZE);
 const BURN_DURATION = 3.5;        // seconds a cell stays actively burning
 const BURNT_RECOVERY = 55;        // seconds before burnt land can regrow
 
-const RABBIT_CAP = 240;
-const FOX_CAP = 55;
-const HAWK_CAP = 12;
+const RABBIT_CAP = 360;
+const FOX_CAP = 82;
+const HAWK_CAP = 18;
 
 const COLORS = {
   landDark: [21, 46, 17],
@@ -28,11 +28,11 @@ const COLORS = {
   waterHi: [57, 197, 187],        // --sky
   burning: [255, 126, 0],         // --orange
   burningHot: [255, 0, 69],       // --red
-  burnt: [14, 9, 8],
-  rabbit: '#f1e9d8',
-  fox: '#FF7E00',
-  hawk: '#9B6FD8',                // derived from --purple, lightened
+  burnt: [42, 15, 11],            // dark scorched maroon-brown, matched to reference art
+  emberGlow: [168, 48, 20],
 };
+
+const EMOJI = { rabbit: '🐇', fox: '🦊', hawk: '🦅' };
 
 // ---------- STATE -------------------------------------------------------
 const cellType = new Uint8Array(COLS * ROWS);   // 0 land/grass, 1 water, 2 burning, 3 burnt
@@ -135,9 +135,9 @@ function carveRiver() {
 
 function scatterInitialLife() {
   entities = [];
-  spawnBatch('rabbit', 46);
-  spawnBatch('fox', 9);
-  spawnBatch('hawk', 3);
+  spawnBatch('rabbit', 69);
+  spawnBatch('fox', 14);
+  spawnBatch('hawk', 5);
 }
 
 function spawnBatch(type, count) {
@@ -513,8 +513,11 @@ function renderTerrain() {
         b = lerp(COLORS.burningHot[2], COLORS.burning[2], flick);
       } else {
         const ember = burntTimer[i] > BURNT_RECOVERY - 8 && texNoise[i] > 0.85;
-        if (ember) { r = 200; g = 70; b = 20; }
-        else { r = COLORS.burnt[0]; g = COLORS.burnt[1]; b = COLORS.burnt[2]; }
+        if (ember) { r = COLORS.emberGlow[0]; g = COLORS.emberGlow[1]; b = COLORS.emberGlow[2]; }
+        else {
+          const texVar = (texNoise[i] - 0.5) * 10;
+          r = COLORS.burnt[0] + texVar; g = COLORS.burnt[1] + texVar * 0.6; b = COLORS.burnt[2] + texVar * 0.4;
+        }
       }
       data[p] = clamp(r, 0, 255);
       data[p + 1] = clamp(g, 0, 255);
@@ -529,39 +532,25 @@ function renderEntities() {
   const w = entityCanvas.width, h = entityCanvas.height;
   ectx.clearRect(0, 0, w, h);
   const sx = w / COLS, sy = h / ROWS;
-  const r = Math.max(1.6, Math.min(sx, sy) * 0.62);
+  const cellPx = Math.min(sx, sy);
+  ectx.textAlign = 'center';
+  ectx.textBaseline = 'middle';
 
   for (const e of entities) {
     const cx = e.x * sx, cy = e.y * sy;
-    if (e.type === 'rabbit') {
-      ectx.fillStyle = COLORS.rabbit;
-      ectx.beginPath();
-      ectx.ellipse(cx, cy, r * 0.9, r * 0.65, 0, 0, Math.PI * 2);
-      ectx.fill();
-    } else if (e.type === 'fox') {
-      ectx.fillStyle = COLORS.fox;
-      ectx.beginPath();
-      ectx.moveTo(cx, cy - r * 1.1);
-      ectx.lineTo(cx + r * 0.95, cy + r * 0.8);
-      ectx.lineTo(cx - r * 0.95, cy + r * 0.8);
-      ectx.closePath();
-      ectx.fill();
-    } else {
-      const shadowY = cy + r * 0.35;
+    if (e.type === 'hawk') {
+      const size = cellPx * 2.6;
+      const shadowY = cy + size * 0.3;
       ectx.fillStyle = 'rgba(0,0,0,0.28)';
       ectx.beginPath();
-      ectx.ellipse(cx, shadowY, r * 1.1, r * 0.35, 0, 0, Math.PI * 2);
+      ectx.ellipse(cx, shadowY, size * 0.32, size * 0.11, 0, 0, Math.PI * 2);
       ectx.fill();
-
-      ectx.strokeStyle = COLORS.hawk;
-      ectx.lineWidth = Math.max(1.2, r * 0.32);
-      ectx.lineCap = 'round';
-      const wing = r * 1.35;
-      const flap = Math.sin(simTime * 9 + e.id) * r * 0.35;
-      ectx.beginPath();
-      ectx.moveTo(cx - wing, cy - flap);
-      ectx.quadraticCurveTo(cx, cy + r * 0.4, cx + wing, cy - flap);
-      ectx.stroke();
+      ectx.font = `${size}px sans-serif`;
+      ectx.fillText(EMOJI.hawk, cx, cy);
+    } else {
+      const size = cellPx * 2.1;
+      ectx.font = `${size}px sans-serif`;
+      ectx.fillText(EMOJI[e.type], cx, cy);
     }
   }
 }

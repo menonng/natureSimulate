@@ -7,6 +7,8 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<button id="appSwitchBtn" title="다른 시뮬레이터로 전환">💨 유체 시뮬레이터</button>
+
 <div id="app">
 
   <header id="topbar">
@@ -88,6 +90,25 @@
 
   <p id="hint">지형 위를 클릭하거나 드래그해서 선택한 도구를 사용하세요.</p>
 </div>
+
+<div id="fluidApp" class="hidden">
+  <header id="fluidTopbar">
+    <h1>💨 방귀 유체 시뮬레이터</h1>
+    <div class="btnrow">
+      <button id="fluidClearBtn" title="유체 초기화">🧹 초기화</button>
+    </div>
+  </header>
+  <div id="fluidFrame">
+    <div id="fluidCanvasWrap">
+      <canvas id="fluidCanvas"></canvas>
+      <div id="fluidChar">😐</div>
+    </div>
+  </div>
+  <p id="fluidHint">원 주위를 클릭해서 조준하면 그 방향으로 방귀가 나갑니다. 나비에-스토크스 방정식으로 기체 확산을 실시간 계산합니다.</p>
+</div>
+
 <script src="script.js"></script>
+<script src="fluid.js"></script>
+<script src="switch.js"></script>
 </body>
 </html>

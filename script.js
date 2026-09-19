@@ -915,7 +915,11 @@ function bindUI() {
 }
 
 // ---------- MAIN LOOP -----------------------------------------------------
+let ecosystemRunning = true;
+
 function frame(now) {
+  if (!ecosystemRunning) return; // paused while the fluid sim view is showing
+
   if (!lastFrameTime) lastFrameTime = now;
   let dt = (now - lastFrameTime) / 1000;
   lastFrameTime = now;
@@ -941,6 +945,14 @@ function frame(now) {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) lastFrameTime = 0;
 });
+
+window.pauseEcosystem = function () { ecosystemRunning = false; };
+window.resumeEcosystem = function () {
+  if (ecosystemRunning) return;
+  ecosystemRunning = true;
+  lastFrameTime = 0;
+  requestAnimationFrame(frame);
+};
 
 // ---------- INIT -----------------------------------------------------
 function init() {

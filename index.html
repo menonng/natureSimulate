@@ -98,6 +98,78 @@
   <p id="hint">지형 위를 클릭하거나 드래그해서 선택한 도구를 사용하세요.</p>
 </div>
 
+<div id="civApp" class="simApp hidden">
+  <header class="simTopbar">
+    <h1>🏛️ 문명 시뮬레이터</h1>
+    <div id="civSpeedControls" class="btnrow">
+      <button class="civSpeedBtn" data-speed="0" title="일시정지">⏸</button>
+      <button class="civSpeedBtn active" data-speed="1" title="1배속">1x</button>
+      <button class="civSpeedBtn" data-speed="2" title="2배속">2x</button>
+      <button class="civSpeedBtn" data-speed="4" title="4배속">4x</button>
+      <button class="civSpeedBtn" data-speed="8" title="8배속">8x</button>
+    </div>
+  </header>
+
+  <div id="civToolbar">
+    <div class="toolgroup">
+      <button class="civToolBtn active" data-civtool="ocean" title="바다 그리기">🌊<span>바다</span></button>
+      <button class="civToolBtn" data-civtool="plains" title="평지 만들기">🌾<span>평지</span></button>
+      <button class="civToolBtn" data-civtool="mountain" title="산맥 만들기">⛰️<span>산맥</span></button>
+      <button class="civToolBtn" data-civtool="settle" title="정착지 세우기">🏘️<span>정착</span></button>
+      <button class="civToolBtn" data-civtool="erase" title="사람·정착지 지우기">🧽<span>지우개</span></button>
+    </div>
+    <div class="toolgroup">
+      <button class="civToolBtn" data-civtool="person" title="사람 놓기">🧍<span>사람</span></button>
+    </div>
+    <div class="toolgroup">
+      <input type="text" id="civSeedInput" placeholder="시드" title="지도 시드" maxlength="24">
+      <button id="civNewSeedBtn" title="새 시드로 지도 생성">🎲 새 지도</button>
+      <button id="civResetBtn" title="같은 시드로 초기화">↺ 초기화</button>
+    </div>
+  </div>
+
+  <div id="civFrame">
+    <div id="civCanvasWrap">
+      <canvas id="civTerrainCanvas"></canvas>
+      <canvas id="civEntityCanvas"></canvas>
+    </div>
+
+    <div id="civBottomPanel">
+      <div class="panelLeft">
+        <canvas id="civGraphCanvas"></canvas>
+        <div id="civCounts">
+          <span class="cnt" id="civCntPeople">🧍 0</span>
+          <span class="cnt" id="civCntSettlements">🏘️ 0</span>
+          <span class="cnt" id="civCntNations">🏳️ 0</span>
+        </div>
+      </div>
+      <div class="panelRight">
+        <div class="fieldNotesTitle">🏛️ NATIONS</div>
+        <ul id="civNationList" class="civNationList">
+          <li class="civNationEmpty">아직 형성된 국가가 없습니다.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div id="civSliderRow">
+      <div class="sliderBox">
+        <label for="civResourceRateSlider">자원 재생 속도</label>
+        <input type="range" id="civResourceRateSlider" min="1" max="100" value="35">
+      </div>
+      <div class="sliderBox">
+        <label for="civBrushSizeSlider">브러시 크기</label>
+        <input type="range" id="civBrushSizeSlider" min="1" max="14" value="5">
+      </div>
+      <div class="sliderBox">
+        <label for="civGrowthRateSlider">인구 성장 속도</label>
+        <input type="range" id="civGrowthRateSlider" min="1" max="100" value="35">
+      </div>
+    </div>
+  </div>
+
+  <p class="simHint">지형 위를 클릭·드래그해서 도구를 사용하세요. 사람들이 모이면 정착지가, 정착지가 늘어나면 국가가 형성됩니다.</p>
+</div>
+
 <div id="fluidApp" class="simApp hidden">
   <header class="simTopbar">
     <h1>💨 방귀 유체 시뮬레이터</h1>
@@ -131,6 +203,7 @@
 </div>
 
 <script src="script.js"></script>
+<script src="civ.js"></script>
 <script src="fluid.js"></script>
 <script type="module" src="water.js"></script>
 <script src="switch.js"></script>

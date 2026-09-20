@@ -81,6 +81,7 @@
   let lastFrameTime = 0;
   let accumulator = 0;
   let currentSeed = '';
+  let selectedNationId = null; // set by clicking a nation in the list; highlights its settlements on the map
 
   const history = [];
   const HISTORY_MAX = 600;
@@ -88,6 +89,10 @@
   const SAMPLE_INTERVAL = 1.5;
 
   // ---------- NAME GENERATION -------------------------------------------
+  // Every nation (and by extension its people, its leaders, and its ruling
+  // family) is assigned one of eight naming cultures at founding: seven
+  // real-world-flavored syllable banks plus 나에로크어 (Naerok), an
+  // invented language built mechanically out of Korean -- see naerokify().
   const SYL_A = ['아', '카', '무', '시', '바', '노', '겔', '루', '단', '오', '테', '란', '조', '페', '힌'];
   const SYL_B = ['란', '도', '리아', '벤', '가르', '문', '자르', '엔', '실', '토', '나', '문드', '샤', '린'];
   function genName(minS, maxS) {
@@ -96,10 +101,121 @@
     for (let i = 0; i < n; i++) s += i === 0 ? pick(SYL_A) : pick(SYL_B);
     return s;
   }
-  function genNationName() { return genName(2, 3) + pick(['국', '제국', '연맹', '왕국', '공화국']); }
-  function genPersonName() { return genName(2, 3); }
   function genReligionName() { return genName(2, 2) + pick(['교', '신앙', '도']); }
-  function genFamilyName() { return genName(1, 2) + '가'; }
+
+  // Hangul <-> Latin conversion, used only to build Naerok names: romanize
+  // a Korean syllable block via its Unicode cho/jung/jong decomposition
+  // (Revised-Romanization-style), and the reverse -- greedily reading a
+  // Latin string back into Hangul the way a foreign loanword would be
+  // (longest-match vowel/consonant digraphs, an epenthetic eu for a
+  // stranded consonant, maximal-onset preference for codas).
+  function romanizeHangul(str) {
+    const ROM_CHO = ['g', 'kk', 'n', 'd', 'tt', 'r', 'm', 'b', 'pp', 's', 'ss', '', 'j', 'jj', 'ch', 'k', 't', 'p', 'h'];
+    const ROM_JUNG = ['a', 'ae', 'ya', 'yae', 'eo', 'e', 'yeo', 'ye', 'o', 'wa', 'wae', 'oe', 'yo', 'u', 'wo', 'we', 'wi', 'yu', 'eu', 'ui', 'i'];
+    const ROM_JONG = ['', 'k', 'k', 'k', 'n', 'n', 'n', 't', 'l', 'k', 'm', 'l', 'l', 'l', 'p', 'l', 'm', 'p', 'p', 't', 't', 'ng', 't', 't', 'k', 't', 'p', 't'];
+    let out = '';
+    for (const ch of str) {
+      const code = ch.codePointAt(0) - 0xAC00;
+      if (code < 0 || code > 11171) { out += ch; continue; }
+      out += ROM_CHO[Math.floor(code / 588)] + ROM_JUNG[Math.floor((code % 588) / 28)] + ROM_JONG[code % 28];
+    }
+    return out;
+  }
+  const NAEROK_VOWELS = [['yae', 3], ['yeo', 6], ['wae', 10], ['ae', 1], ['ya', 2], ['eo', 4], ['ye', 7], ['wa', 9], ['oe', 11], ['yo', 12], ['wo', 14], ['we', 15], ['wi', 16], ['yu', 17], ['eu', 18], ['ui', 19], ['a', 0], ['e', 5], ['o', 8], ['u', 13], ['i', 20]];
+  const NAEROK_CONS = [['kk', 1], ['tt', 4], ['pp', 8], ['ss', 10], ['jj', 13], ['ch', 14], ['g', 0], ['n', 2], ['d', 3], ['r', 5], ['m', 6], ['b', 7], ['s', 9], ['j', 12], ['k', 15], ['t', 16], ['p', 17], ['h', 18], ['c', 14], ['f', 17], ['l', 5], ['q', 15], ['v', 7], ['x', 15], ['z', 12]];
+  const NAEROK_CODA = [['ng', 21], ['n', 4], ['m', 16], ['l', 8], ['k', 1], ['t', 7], ['p', 17], ['s', 19]];
+  function hangulizeLatin(str) {
+    const s = str.toLowerCase().replace(/[^a-z]/g, '');
+    function matchLongest(pos, table) {
+      for (const [k, v] of table) if (k && s.startsWith(k, pos)) return [k, v];
+      return null;
+    }
+    let i = 0, result = '';
+    const len = s.length;
+    while (i < len) {
+      let choIdx = 11; // silent onset (vowel-initial syllable)
+      let vMatch = matchLongest(i, NAEROK_VOWELS);
+      if (!vMatch) {
+        const cMatch = matchLongest(i, NAEROK_CONS);
+        if (cMatch) {
+          const afterCons = i + cMatch[0].length;
+          const vAfter = matchLongest(afterCons, NAEROK_VOWELS);
+          if (vAfter) { choIdx = cMatch[1]; i = afterCons + vAfter[0].length; vMatch = vAfter; }
+          else { choIdx = cMatch[1]; i += cMatch[0].length; vMatch = ['', 18]; } // stranded consonant -> epenthetic eu
+        } else { i++; continue; }
+      } else {
+        i += vMatch[0].length;
+      }
+      const jungIdx = vMatch[1];
+      let jongIdx = 0;
+      const codaMatch = matchLongest(i, NAEROK_CODA);
+      if (codaMatch) {
+        const afterCoda = i + codaMatch[0].length;
+        if (!matchLongest(afterCoda, NAEROK_VOWELS)) { jongIdx = codaMatch[1]; i = afterCoda; } // else: leave it as the next syllable's onset
+      }
+      result += String.fromCharCode(0xAC00 + (choIdx * 21 + jungIdx) * 28 + jongIdx);
+    }
+    return result || '나';
+  }
+  function naerokify(koreanWord) {
+    const reversed = [...romanizeHangul(koreanWord)].reverse().join('');
+    return hangulizeLatin(reversed);
+  }
+
+  const CULTURES = [
+    { id: 'japan', label: '일본어권',
+      sylA: ['아', '이', '유', '카', '키', '타', '토', '나', '노', '마', '유키', '하루', '료', '켄', '소'],
+      sylB: ['토', '카', '나', '오', '미', '타', '키', '시', '노', '루', '마', '유', '라', '코', '스케'],
+      familySuffix: ['야마', '모토', '카와', '사키', '하라', '시마', '무라'] },
+    { id: 'slavic', label: '슬라브권',
+      sylA: ['블라', '보리', '라도', '미로', '노보', '스타', '베스', '드미', '야로', '볼코', '체르', '두브'],
+      sylB: ['미르', '슬라프', '노프', '친', '보', '단', '린', '토프', '예프', '고로드'],
+      familySuffix: ['스키', '비치', '노프', '코프'] },
+    { id: 'germanic', label: '게르만권',
+      sylA: ['볼프', '하인', '프리트', '베르크', '슈타인', '하르트', '발트', '그림', '울프', '지크', '브룬'],
+      sylB: ['하임', '부르크', '만', '리히', '드리히', '올트', '가르', '문트', '베르트'],
+      familySuffix: ['만', '베르크', '슈타인', '하르트'] },
+    { id: 'england', label: '잉글랜드',
+      sylA: ['에드', '윌', '헨', '아서', '찰스', '조지', '토마스', '리처드', '로버트', '존', '알프레드', '월터', '휴'],
+      sylB: ['워드', '리엄', '리', '튼', '포드', '필드', '우드', '버리', '턴'],
+      familySuffix: ['턴', '포드', '필드', '우드', '버리', '스미스'] },
+    { id: 'scotland', label: '스코틀랜드',
+      sylA: ['던컨', '프레이저', '브루스', '스튜어트', '캠벨', '글렌', '앵거스', '말콤', '이완', '고든', '알라스데어'],
+      sylB: ['도날드', '그레거', '켄지', '타비시', '클레인', '로크'],
+      familyPrefix: ['맥'] },
+    { id: 'usa', label: '미국',
+      sylA: ['잭슨', '메이슨', '오스틴', '데일턴', '코디', '브랜든', '타일러', '라이언', '콜튼', '헌터', '케이든'],
+      sylB: ['슨', '톤', '리', '든', '윈', '포드', '랜드'],
+      familySuffix: ['슨', '스', '턴'] },
+    { id: 'africa', label: '아프리카',
+      sylA: ['콰메', '아마라', '조라', '코피', '아데', '치디', '니아', '바바', '이몰라', '세쿠', '투미', '왈레'],
+      sylB: ['투', '메', '라', '디', '왈레', '니', '쿠', '분두'],
+      familySuffix: ['우', '예', '이', '아'] },
+    { id: 'naerok', label: '나에로크어' },
+  ];
+  function pickCulture() { return pick(CULTURES); }
+  function culturalRoot(culture, minS, maxS) {
+    const n = rrandInt(minS, maxS);
+    let s = '';
+    for (let i = 0; i < n; i++) s += i === 0 ? pick(culture.sylA) : pick(culture.sylB);
+    return s;
+  }
+  const NATION_SUFFIXES = ['국', '제국', '연맹', '왕국', '공화국'];
+  function genNationName(culture) {
+    if (culture.id === 'naerok') return naerokify(genName(2, 3)) + pick(NATION_SUFFIXES);
+    return culturalRoot(culture, 2, 3) + pick(NATION_SUFFIXES);
+  }
+  function genPersonName(culture) {
+    if (culture.id === 'naerok') return naerokify(genName(2, 3));
+    return culturalRoot(culture, 2, 3);
+  }
+  function genFamilyName(culture) {
+    if (culture.id === 'naerok') return naerokify(genName(1, 2)) + '가';
+    const root = culturalRoot(culture, 1, 2);
+    if (culture.familyPrefix) return pick(culture.familyPrefix) + root + '가';
+    if (culture.familySuffix) return root + pick(culture.familySuffix) + '가';
+    return root + '가';
+  }
 
   const IDEOLOGIES = ['군주제', '신정', '공화정', '전체주의', '부족연합'];
   const LEADER_TITLE = { 군주제: '왕', 신정: '대사제', 공화정: '대통령', 전체주의: '총통', 부족연합: '족장' };
@@ -158,6 +274,7 @@
           if (newCls === 'rel-war' && oldCls !== undefined) {
             pushSpeech(a, '전쟁 선포', 'war_declared', { otherName: b.name });
             pushSpeech(b, '전쟁 선포', 'war_declared', { otherName: a.name });
+            showGlobalNotification(`⚔️ ${a.name}와(과) ${b.name}이(가) 전쟁을 선포했습니다.`, 'war');
           } else if (newCls === 'rel-ally' && oldCls !== undefined) {
             pushSpeech(a, '동맹 결성', 'alliance_formed', { otherName: b.name });
             pushSpeech(b, '동맹 결성', 'alliance_formed', { otherName: a.name });
@@ -179,9 +296,9 @@
   // conditioning for the leader-speech LLM later.
   const PERSONALITIES = ['호전적', '경건한', '실용적', '고립주의적', '팽창주의적', '자비로운', '전제적', '이상주의적', '음모적', '검소한'];
   const PHILOSOPHIES = ['자유', '질서', '전통', '혁신', '명예', '부', '신앙', '정복', '평등', '혈통'];
-  function genLeader(dynasty) {
+  function genLeader(dynasty, culture) {
     return {
-      name: genPersonName(),
+      name: genPersonName(culture),
       dynasty,
       personality: pick(PERSONALITIES),
       philosophy: pick(PHILOSOPHIES),
@@ -213,31 +330,52 @@
     검소한: ['사치는 우리의 적이다.', '검소함이 나라를 지킨다.', '작은 것에도 감사할 뿐이다.'],
   };
   const SPEECH_PHILOSOPHY_CLOSERS = {
-    자유: '자유가 없다면 아무 의미도 없다.',
-    질서: '질서 없이는 번영도 없다.',
-    전통: '선조들의 길을 잊지 않겠다.',
-    혁신: '변화를 두려워하지 않겠다.',
-    명예: '명예를 목숨보다 소중히 여긴다.',
-    부: '풍요로움이 곧 힘이다.',
-    신앙: '믿음이 우리를 지켜준다.',
-    정복: '정복만이 살길이다.',
-    평등: '모두가 평등한 세상을 만들겠다.',
-    혈통: '핏줄의 이름을 더럽히지 않겠다.',
+    자유: ['자유가 없다면 아무 의미도 없다.', '누구도 우리를 가두지 못한다.', '스스로 선택한 길만이 옳다.'],
+    질서: ['질서 없이는 번영도 없다.', '혼란은 곧 파멸이다.', '규율이 우리를 지킨다.'],
+    전통: ['선조들의 길을 잊지 않겠다.', '오래된 것이 늘 낡은 것은 아니다.', '뿌리 깊은 나무는 흔들리지 않는다.'],
+    혁신: ['변화를 두려워하지 않겠다.', '어제의 방식으로는 내일을 열 수 없다.', '새로움이야말로 우리의 무기다.'],
+    명예: ['명예를 목숨보다 소중히 여긴다.', '부끄러운 승리보다 떳떳한 패배가 낫다.', '내 이름에 먹칠하지 않겠다.'],
+    부: ['풍요로움이 곧 힘이다.', '곳간에서 인심 난다.', '부유한 나라만이 살아남는다.'],
+    신앙: ['믿음이 우리를 지켜준다.', '신의 뜻은 거스를 수 없다.', '기도가 곧 우리의 힘이다.'],
+    정복: ['정복만이 살길이다.', '약한 자는 가질 자격이 없다.', '땅은 취하는 자의 것이다.'],
+    평등: ['모두가 평등한 세상을 만들겠다.', '누구도 특별히 우월하지 않다.', '함께 나누는 것이 옳다.'],
+    혈통: ['핏줄의 이름을 더럽히지 않겠다.', '내 혈통이 곧 나의 자격이다.', '조상의 이름에 부끄럽지 않게.'],
   };
+  // A leader's own signature line: deterministically picked from their
+  // name+dynasty (a simple string hash, not rng()), so the same leader
+  // always closes with the same personal flourish across every speech --
+  // a consistent individual voice on top of the personality/philosophy/
+  // event pools above, which vary every time.
+  const SPEECH_SIGNATURES = [
+    '나, {name}의 이름을 걸고.', '{dynasty}의 피가 증명할 것이다.', '역사가 나를 기억하리라.',
+    '이것이 나의 방식이다.', '더 말할 필요는 없다.', '{name}은(는) 약속을 지킨다.',
+    '내 뒤에는 {dynasty}가 있다.', '시간이 나를 증명하리라.', '나의 말은 곧 나의 검이다.',
+    '{dynasty}는 흔들리지 않는다.', '{name}, 그 이름을 기억하라.', '침묵보다 행동이 낫다.',
+  ];
+  function hashPick(arr, seedStr) {
+    let h = 0;
+    for (let i = 0; i < seedStr.length; i++) h = (h * 31 + seedStr.charCodeAt(i)) >>> 0;
+    return arr[h % arr.length];
+  }
   const SPEECH_EVENT_CORE = {
     founding: (n) => [`${n.name}의 건국을 선포한다.`, '오늘 이 순간부터 우리는 하나의 나라다.', '이곳에 우리의 터전을 세운다.'],
     succession: (n) => [`${n.leader.dynasty}의 이름으로 이 자리에 선다.`, '선대의 뜻을 이어받아 나라를 이끌겠다.', '무거운 책임을 받아들인다.'],
     war_declared: (n, ctx) => [`${ctx.otherName}에 전쟁을 선포한다.`, `${ctx.otherName}은(는) 이제 우리의 적이다.`, `더는 ${ctx.otherName}과(와) 함께할 수 없다.`],
     alliance_formed: (n, ctx) => [`${ctx.otherName}와(과) 동맹을 맺는다.`, `이제 ${ctx.otherName}은(는) 우리의 벗이다.`, `함께라면 두려울 것이 없다.`],
     settlement_captured: (n, ctx) => [`${ctx.settlementName}을(를) 우리의 영토로 선포한다.`, `${ctx.settlementName}은(는) 이제 ${n.name}의 땅이다.`, `승리는 우리의 것이다.`],
+    airstrike: (n, ctx) => [`${ctx.settlementName}에 공습을 명령했다.`, `하늘에서 심판이 내린다.`, `${ctx.settlementName} 상공에 폭격이 시작됐다.`],
+    nuclear_strike: (n, ctx) => [`${ctx.settlementName}에 핵무기를 사용했다.`, `돌이킬 수 없는 선택이었다.`, `${ctx.settlementName}은(는) 이제 잿더미다.`],
+    capital_relocated: (n, ctx) => [`${ctx.settlementName}을(를) 새로운 수도로 삼는다.`, `우리는 무너지지 않는다.`, `잿더미 위에서도 나라는 계속된다.`],
   };
   function generateLeaderSpeech(nation, eventType, ctx) {
     const L = nation.leader;
     const opener = pick(SPEECH_OPENERS[L.personality] || ['...']);
     const coreOptions = SPEECH_EVENT_CORE[eventType] ? SPEECH_EVENT_CORE[eventType](nation, ctx || {}) : ['...'];
     const core = pick(coreOptions);
-    const closer = SPEECH_PHILOSOPHY_CLOSERS[L.philosophy] || '';
-    return `${opener} ${core} ${closer}`.trim();
+    const closer = pick(SPEECH_PHILOSOPHY_CLOSERS[L.philosophy] || ['...']);
+    const signature = hashPick(SPEECH_SIGNATURES, L.name + L.dynasty)
+      .replace('{name}', L.name).replace('{dynasty}', L.dynasty);
+    return `${opener} ${core} ${closer} ${signature}`.trim();
   }
 
   const speechLog = [];
@@ -250,6 +388,26 @@
     });
     if (speechLog.length > SPEECH_LOG_MAX) speechLog.length = SPEECH_LOG_MAX;
     if (diplomacyOpen && activeDiploTab === 'speeches') renderSpeechPanel();
+  }
+
+  // A bottom-right toast feed for events significant enough to matter to
+  // the whole world, not just the nations directly involved (a routine
+  // hereditary succession isn't one; a nation collapsing or a war starting
+  // is). Independent of whether the 국가 정보 window is even open.
+  const TOAST_MAX_VISIBLE = 5;
+  function showGlobalNotification(text, type) {
+    const container = document.getElementById('civToastContainer');
+    if (!container) return;
+    const el = document.createElement('div');
+    el.className = `civToast toast-${type || 'info'}`;
+    el.textContent = text;
+    container.appendChild(el);
+    requestAnimationFrame(() => el.classList.add('show'));
+    setTimeout(() => {
+      el.classList.remove('show');
+      setTimeout(() => el.remove(), 400);
+    }, 5500);
+    while (container.children.length > TOAST_MAX_VISIBLE) container.removeChild(container.firstChild);
   }
 
   const NATION_HUES = [355, 25, 48, 100, 175, 210, 265, 320, 15, 130, 195, 285];
@@ -408,6 +566,9 @@
     simTime = 0;
     territory = new Int32Array(COLS * ROWS).fill(-1);
     territoryAccum = 0;
+    selectedNationId = null;
+    const toastContainer = document.getElementById('civToastContainer');
+    if (toastContainer) toastContainer.innerHTML = '';
 
     // scatter starting population on livable land, away from ocean/mountain
     let placed = 0, guard = 0;
@@ -463,16 +624,18 @@
   const NATION_JOIN_RADIUS = 34;
   function foundNation(x, y) {
     const ideology = pick(IDEOLOGIES);
-    const dynasty = genFamilyName();
+    const culture = pickCulture();
+    const dynasty = genFamilyName(culture);
     const colorInfo = nextNationColor();
     const nation = {
       id: nextId++,
-      name: genNationName(),
+      name: genNationName(culture),
       color: colorInfo.css,
       rgb: colorInfo.rgb,
       ideology,
+      culture,
       dynasty,
-      leader: genLeader(dynasty),
+      leader: genLeader(dynasty, culture),
       religion: genReligionName(),
       faith: rrand(0.05, 0.15),
       age: 0,
@@ -483,6 +646,7 @@
     };
     nations.push(nation);
     pushSpeech(nation, '건국 선언', 'founding');
+    showGlobalNotification(`🎉 ${nation.name}이(가) 건국되었습니다.`, 'birth');
     return nation;
   }
   function nearestNation(x, y) {
@@ -566,13 +730,13 @@
       for (let ri = 1; ri < raceCounts.length; ri++) if (raceCounts[ri] > raceCounts[domRaceIdx]) domRaceIdx = ri;
       const settlement = {
         id: nextId++, x: p.x, y: p.y,
-        name: genPersonName() + pick(['성', '촌', '항', '진']),
+        name: genPersonName(nation.culture) + pick(['성', '촌', '항', '진']),
         nationId: nation.id,
         population,
         raceComposition: raceCounts.map((c) => (c / raceSum) * population),
         isCity: false, isCapital,
         ideology: nation.ideology,
-        leaderName: isCapital ? nation.leader.name : genPersonName(),
+        leaderName: isCapital ? nation.leader.name : genPersonName(nation.culture),
         leaderRace: domRaceIdx,
         founded: simTime,
       };
@@ -602,6 +766,36 @@
       if (r <= 0) { chosen = candidates[i]; break; }
     }
     s.ideology = chosen;
+  }
+
+  // Leaders are actual people, not a fixed icon: each wanders on a leash
+  // around their own settlement (never leaving it far behind, never
+  // crossing onto ocean), with an occasional new wander direction and a
+  // gentle pull back home if they've strayed too far.
+  const LEADER_LEASH = 2.4;
+  function tickLeaders(dt) {
+    for (const s of settlements) {
+      if (s.leaderX === undefined) {
+        s.leaderX = s.x; s.leaderY = s.y;
+        s.leaderVx = rrand(-0.5, 0.5); s.leaderVy = rrand(-0.5, 0.5);
+      }
+      const dxHome = s.x - s.leaderX, dyHome = s.y - s.leaderY;
+      const distHome = Math.hypot(dxHome, dyHome);
+      if (distHome > LEADER_LEASH) {
+        s.leaderVx = lerp(s.leaderVx, (dxHome / distHome) * 0.9, 0.5);
+        s.leaderVy = lerp(s.leaderVy, (dyHome / distHome) * 0.9, 0.5);
+      } else if (rng() < 0.015) {
+        s.leaderVx = rrand(-0.6, 0.6);
+        s.leaderVy = rrand(-0.6, 0.6);
+      }
+      const nx = s.leaderX + s.leaderVx * dt, ny = s.leaderY + s.leaderVy * dt;
+      const cx = clamp(Math.floor(nx), 0, COLS - 1), cy = clamp(Math.floor(ny), 0, ROWS - 1);
+      if (cellType[idx(cx, cy)] === T_OCEAN) {
+        s.leaderVx *= -1; s.leaderVy *= -1;
+      } else {
+        s.leaderX = nx; s.leaderY = ny;
+      }
+    }
   }
 
   function tickSettlements(dt) {
@@ -671,15 +865,27 @@
   function tickNations(dt) {
     for (const nation of nations) {
       nation.age += dt;
+      const nationSettlements = nation.settlementIds.map((sid) => settlements.find((s) => s.id === sid)).filter(Boolean);
+
+      // If the capital was destroyed (drowned, starved out, or otherwise
+      // lost) but the nation still holds other land, its remaining
+      // settlements hold an internal council and elect a new capital --
+      // the most populous survivor -- rather than the nation quietly
+      // going capital-less.
+      if (nationSettlements.length && !nationSettlements.some((s) => s.isCapital)) {
+        const newCapital = nationSettlements.reduce((best, s) => (s.population > best.population ? s : best));
+        newCapital.isCapital = true;
+        nation.leader = genLeader(nation.dynasty, nation.culture);
+        pushSpeech(nation, '수도 재건', 'capital_relocated', { settlementName: newCapital.name });
+        showGlobalNotification(`🏛️ ${nation.name}: 수도 함락, ${newCapital.name}(으)로 천도.`, 'power');
+      }
+
       let pop = 0;
       const raceTotals = new Array(RACES.length).fill(0);
-      for (const sid of nation.settlementIds) {
-        const s = settlements.find((s) => s.id === sid);
-        if (s) {
-          pop += s.population;
-          if (s.raceComposition) {
-            for (let ri = 0; ri < RACES.length; ri++) raceTotals[ri] += s.raceComposition[ri] || 0;
-          }
+      for (const s of nationSettlements) {
+        pop += s.population;
+        if (s.raceComposition) {
+          for (let ri = 0; ri < RACES.length; ri++) raceTotals[ri] += s.raceComposition[ri] || 0;
         }
       }
       nation.totalPopulation = pop;
@@ -692,14 +898,24 @@
       // which can also shift the nation's ideology.
       if (simTime - nation.leader.termStart > nation.leader.termLength) {
         const revolution = rng() < 0.12;
-        const dynasty = revolution ? genFamilyName() : nation.leader.dynasty;
+        const oldDynasty = nation.leader.dynasty;
+        const culture = revolution ? pickCulture() : nation.culture;
+        const dynasty = revolution ? genFamilyName(culture) : nation.leader.dynasty;
         if (revolution) {
           nation.dynasty = dynasty;
+          nation.culture = culture;
           nation.ideology = pick(IDEOLOGIES);
         }
-        nation.leader = genLeader(dynasty);
+        nation.leader = genLeader(dynasty, culture);
         pushSpeech(nation, revolution ? '왕조 교체' : '지도자 승계', 'succession');
+        if (revolution) {
+          showGlobalNotification(`⚔️ ${nation.name}: ${oldDynasty} 몰락, ${dynasty} 집권.`, 'power');
+        }
       }
+    }
+    const collapsed = nations.filter((n) => n.settlementIds.length === 0);
+    for (const n of collapsed) {
+      showGlobalNotification(`⚰️ ${n.name}이(가) 멸망했습니다. (${n.dynasty} 가문 몰락)`, 'fall');
     }
     nations = nations.filter((n) => n.settlementIds.length > 0);
   }
@@ -750,11 +966,71 @@
       pushSpeech(attackerNation, '영토 점령', 'settlement_captured', { settlementName: defender.name });
     }
   }
+  // As a nation's technology (civLevel) advances, war escalates beyond
+  // local raids: from civLevel 4 it can air-strike any enemy settlement
+  // anywhere on the map, and from civLevel 5 (근대) it can use a nuclear
+  // strike -- rare, catastrophic, and felt by the whole world's opinion of
+  // whoever used it, not just the two nations at war.
+  function scorchAround(cx0, cy0, radius, keepFrac) {
+    const cx = Math.floor(cx0), cy = Math.floor(cy0);
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (dx * dx + dy * dy > radius * radius) continue;
+        const x = cx + dx, y = cy + dy;
+        if (!inBounds(x, y)) continue;
+        const i = idx(x, y);
+        resource[i] = clamp(resource[i] * keepFrac, 0, 1);
+      }
+    }
+  }
+  function performAirStrike(attackerNation, target) {
+    const dmgFrac = rrand(0.18, 0.35);
+    target.population = Math.max(1, target.population * (1 - dmgFrac));
+    if (target.raceComposition) {
+      for (let ri = 0; ri < target.raceComposition.length; ri++) target.raceComposition[ri] *= (1 - dmgFrac);
+    }
+    scorchAround(target.x, target.y, 3, 0.3);
+    pushSpeech(attackerNation, '공습 감행', 'airstrike', { settlementName: target.name });
+  }
+  function performNuclearStrike(attackerNation, defenderNation, target) {
+    const dmgFrac = rrand(0.65, 0.9);
+    target.population = Math.max(1, target.population * (1 - dmgFrac));
+    if (target.raceComposition) {
+      for (let ri = 0; ri < target.raceComposition.length; ri++) target.raceComposition[ri] *= (1 - dmgFrac);
+    }
+    scorchAround(target.x, target.y, 6, 0.03);
+    pushSpeech(attackerNation, '핵무기 사용', 'nuclear_strike', { settlementName: target.name });
+    showGlobalNotification(`💥 ${attackerNation.name}이(가) ${target.name}(${defenderNation.name})에 핵무기를 사용했습니다.`, 'nuke');
+    // the world recoils: relations with the victim bottom out, and every
+    // other nation grows warier of the attacker, not just the target
+    relations.set(relationKey(attackerNation.id, defenderNation.id), -100);
+    for (const other of nations) {
+      if (other.id === attackerNation.id || other.id === defenderNation.id) continue;
+      const k = relationKey(attackerNation.id, other.id);
+      const cur = relations.has(k) ? relations.get(k) : 0;
+      relations.set(k, clamp(cur - 25, -100, 100));
+    }
+  }
+  const AIRSTRIKE_CIV_LEVEL = 4;
+  const NUKE_CIV_LEVEL = 5;
+  function considerAdvancedStrike(attackerNation, defenderNation) {
+    const targets = settlements.filter((s) => s.nationId === defenderNation.id);
+    if (!targets.length) return;
+    if (attackerNation.civLevel >= NUKE_CIV_LEVEL && rng() < 0.00035 * WAR_CHECK_INTERVAL) {
+      performNuclearStrike(attackerNation, defenderNation, pick(targets));
+      return;
+    }
+    if (attackerNation.civLevel >= AIRSTRIKE_CIV_LEVEL && rng() < 0.006 * WAR_CHECK_INTERVAL) {
+      performAirStrike(attackerNation, pick(targets));
+    }
+  }
   function tickWarPlunder() {
     for (let i = 0; i < nations.length; i++) {
       for (let j = i + 1; j < nations.length; j++) {
         const a = nations[i], b = nations[j];
         if (!isAtWar(a.id, b.id)) continue;
+        considerAdvancedStrike(a, b);
+        considerAdvancedStrike(b, a);
         const aSettlements = settlements.filter((s) => s.nationId === a.id);
         const bSettlements = settlements.filter((s) => s.nationId === b.id);
         for (const sa of aSettlements) {
@@ -841,6 +1117,7 @@
     tickTerrain(TICK_DT);
     tickPeople(TICK_DT);
     tickSettlements(TICK_DT);
+    tickLeaders(TICK_DT);
     tickNations(TICK_DT);
     tickDiplomacy(TICK_DT);
     simTime += TICK_DT;
@@ -1044,7 +1321,7 @@
     const cellPx = Math.min(sx, sy);
 
     const WALK_FPS = 3.2; // walk-cycle frame swaps per second
-    const spriteH = clamp(cellPx * 1.5, 3, 11); // ordinary wandering people
+    const spriteH = clamp(cellPx * 3, 6, 22); // ordinary wandering people
     ectx.fillStyle = '#f1e9d8';
     for (const p of people) {
       const race = RACES[p.race] || RACES[0];
@@ -1060,9 +1337,12 @@
     }
 
     // Leaders (national and regional heads) are people too, not just the
-    // settlement marker: each settlement renders its leader standing on the
-    // marker, larger than an ordinary wanderer, wearing their title's hat.
-    const LEADER_IDLE_FPS = 1.1;
+    // settlement marker: each settlement renders its leader as an actual
+    // walking person -- wandering on a leash around their settlement (see
+    // tickLeaders) -- larger than an ordinary wanderer, wearing their
+    // title's hat. A selected nation (from the nation list) gets a pulsing
+    // highlight ring on its settlement markers so its location is easy to
+    // spot on the map.
     for (const s of settlements) {
       const nation = nations.find((n) => n.id === s.nationId);
       const cx = s.x * sx, cy = s.y * sy;
@@ -1075,12 +1355,37 @@
       ectx.lineWidth = 1;
       ectx.stroke();
 
+      if (nation && selectedNationId === nation.id) {
+        const pulse = r + 5 + 3 * Math.sin(simTime * 5);
+        ectx.strokeStyle = '#FFCC11';
+        ectx.lineWidth = 2;
+        ectx.beginPath();
+        ectx.arc(cx, cy, pulse, 0, Math.PI * 2);
+        ectx.stroke();
+      }
+
       const leaderRace = RACES[s.leaderRace] || RACES[0];
       const leaderH = Math.max(6, spriteH * 2.3);
-      const frameIdx = Math.floor((simTime + s.id * 0.71) * LEADER_IDLE_FPS) % 2;
-      const drawn = drawPersonSprite(ectx, cx, cy, leaderRace, frameIdx, leaderH, false);
-      const hatTopY = cy - (drawn ? leaderH : r) - 1;
-      if (nation) drawLeaderHat(ectx, cx, hatTopY, s.isCapital ? nation.ideology : (s.ideology || nation.ideology), s.isCapital);
+      const lx = (s.leaderX === undefined ? s.x : s.leaderX) * sx;
+      const ly = (s.leaderY === undefined ? s.y : s.leaderY) * sy;
+      const frameIdx = Math.floor((simTime + s.id * 0.71) * WALK_FPS) % 2;
+      const drawn = drawPersonSprite(ectx, lx, ly, leaderRace, frameIdx, leaderH, (s.leaderVx || 0) > 0.02);
+      const hatTopY = ly - (drawn ? leaderH : r) - 1;
+      if (nation) drawLeaderHat(ectx, lx, hatTopY, s.isCapital ? nation.ideology : (s.ideology || nation.ideology), s.isCapital);
+
+      // the capital carries its nation's name -- anchored to the fixed
+      // settlement position (not the wandering leader), so it stays put
+      if (s.isCapital && nation) {
+        const labelY = cy - r - leaderH - 20;
+        const fontPx = Math.max(9, Math.min(15, cellPx * 1.6));
+        ectx.font = `bold ${fontPx}px 'Nanum Myeongjo', Georgia, serif`;
+        ectx.textAlign = 'center';
+        ectx.textBaseline = 'bottom';
+        ectx.fillStyle = 'rgba(0,0,0,0.65)';
+        ectx.fillText(nation.name, cx + 1, labelY + 1);
+        ectx.fillStyle = '#FFCC11';
+        ectx.fillText(nation.name, cx, labelY);
+      }
     }
   }
 
@@ -1139,7 +1444,9 @@
       }
       const domRacePct = raceSum > 0 ? Math.round((raceTotals[domIdx] / raceSum) * 100) : 0;
       const domRaceName = RACES[domIdx] ? RACES[domIdx].name : '';
-      return `<li><span class="civSwatch" style="background:${n.color}"></span>` +
+      const selected = n.id === selectedNationId ? ' selected' : '';
+      return `<li class="civNationRow${selected}" data-nationid="${n.id}" title="클릭하면 지도에서 위치를 표시합니다">` +
+        `<span class="civSwatch" style="background:${n.color}"></span>` +
         `<span><b>${n.name}</b> (${n.dynasty}) · ${LEADER_TITLE[n.ideology]} ${L.name} · ${n.ideology} · ${n.religion}(${Math.round(n.faith * 100)}%)` +
         `<br><span class="civMeta">${L.personality}·${L.philosophy}주의 지도자 · Lv.${n.civLevel} ${tier} · 인구 ${Math.round(n.totalPopulation)} · 정착지 ${n.settlementIds.length}` +
         (raceSum > 0 ? ` · 다수종족 ${domRaceName} ${domRacePct}%` : '') +
@@ -1179,13 +1486,20 @@
     body.innerHTML = sorted.map((n) => {
       const tier = CIV_TIER_NAME[n.civLevel] || '';
       const others = nations.filter((o) => o.id !== n.id);
+
+      // at-a-glance relation counts before the per-nation detail chips
+      const counts = { 'rel-ally': 0, 'rel-friendly': 0, 'rel-neutral': 0, 'rel-tense': 0, 'rel-war': 0 };
+      for (const o of others) counts[REL_LABEL(getRelation(n.id, o.id)).cls]++;
+      const LABELS = { 'rel-ally': '동맹', 'rel-friendly': '우호', 'rel-tense': '긴장', 'rel-war': '전쟁' };
+      const summary = Object.keys(LABELS).map((cls) => counts[cls] ? `<span class="civRelChip ${cls}">${LABELS[cls]} ${counts[cls]}</span>` : '').join('')
+        || '<span class="civDiploEmpty">이렇다 할 관계가 없습니다.</span>';
       const relRow = others.length
         ? others.map((o) => {
             const score = getRelation(n.id, o.id);
             const rel = REL_LABEL(score);
             return `<span class="civRelChip ${rel.cls}" title="${Math.round(score)}">${o.name} · ${rel.label}</span>`;
           }).join('')
-        : '<span class="civDiploEmpty">교류 중인 다른 국가가 없습니다.</span>';
+        : '';
 
       const nationSettlements = settlements.filter((s) => s.nationId === n.id);
       const regionRows = nationSettlements.length
@@ -1193,16 +1507,29 @@
             const ideologyText = s.isCapital ? n.ideology : (s.ideology || n.ideology);
             const title = s.isCapital ? LEADER_TITLE[n.ideology] : REGIONAL_TITLE[ideologyText];
             const diverged = !s.isCapital && ideologyText !== n.ideology;
-            return `<div class="civDiploRegionRow"><span>${s.isCapital ? '👑 ' : ''}${s.name}${s.isCapital ? ' (수도)' : ''} · ${title} ${s.leaderName}</span>` +
-              `<span class="${diverged ? 'civDiploDiverged' : ''}">${ideologyText}${diverged ? ' ⚠️' : ''}</span></div>`;
+            return `<tr class="${diverged ? 'civDiploDivergedRow' : ''}">` +
+              `<td>${s.isCapital ? '👑 ' : ''}${s.name}${s.isCapital ? ' (수도)' : ''}</td>` +
+              `<td>${title}</td><td>${s.leaderName}</td><td>${ideologyText}${diverged ? ' ⚠️' : ''}</td></tr>`;
           }).join('')
-        : '<div class="civDiploEmpty">정착지가 없습니다.</div>';
+        : '<tr><td colspan="4" class="civDiploEmpty">정착지가 없습니다.</td></tr>';
 
       return `<div class="civDiploNation">` +
-        `<div class="civDiploNationHead"><span class="civSwatch" style="background:${n.color}"></span>` +
-        `<b>${n.name}</b> (${n.dynasty}) <span class="civMeta">· 공식 사상 ${n.ideology} · Lv.${n.civLevel} ${tier} · 인구 ${Math.round(n.totalPopulation)}</span></div>` +
-        `<div class="civDiploSection"><div class="civDiploSectionTitle">외교 관계</div><div class="civRelRow">${relRow}</div></div>` +
-        `<div class="civDiploSection"><div class="civDiploSectionTitle">지역별 사상</div>${regionRows}</div>` +
+        `<div class="civDiploNationHead"><span class="civSwatch" style="background:${n.color}"></span><b>${n.name}</b> <span class="civMeta">(${n.dynasty})</span></div>` +
+        `<dl class="civDiploStatGrid">` +
+        `<dt>이념</dt><dd>${n.ideology}</dd>` +
+        `<dt>지도자</dt><dd>${LEADER_TITLE[n.ideology]} ${n.leader.name} · ${n.leader.personality}·${n.leader.philosophy}주의</dd>` +
+        `<dt>종교</dt><dd>${n.religion} (신앙 ${Math.round(n.faith * 100)}%)</dd>` +
+        `<dt>문명</dt><dd>Lv.${n.civLevel} ${tier}</dd>` +
+        `<dt>인구 · 정착지</dt><dd>${Math.round(n.totalPopulation)}명 · ${n.settlementIds.length}곳</dd>` +
+        `<dt>문화</dt><dd>${n.culture ? n.culture.label : '-'}</dd>` +
+        `</dl>` +
+        `<div class="civDiploSection"><div class="civDiploSectionTitle">외교 관계</div>` +
+        `<div class="civRelRow">${summary}</div>` +
+        (relRow ? `<div class="civRelRow civRelRowDetail">${relRow}</div>` : '') +
+        `</div>` +
+        `<div class="civDiploSection"><div class="civDiploSectionTitle">지역별 사상</div>` +
+        `<table class="civDiploTable"><thead><tr><th>지역</th><th>직위</th><th>지도자</th><th>사상</th></tr></thead><tbody>${regionRows}</tbody></table>` +
+        `</div>` +
         `</div>`;
     }).join('');
   }
@@ -1250,12 +1577,12 @@
       if (!nation) { nation = foundNation(x, y); isCapital = true; }
       const settlement = {
         id: nextId++, x: x + 0.5, y: y + 0.5,
-        name: genPersonName() + pick(['성', '촌', '항', '진']),
+        name: genPersonName(nation.culture) + pick(['성', '촌', '항', '진']),
         nationId: nation.id, population: 10,
         raceComposition: [5, 5],
         isCity: false, isCapital,
         ideology: nation.ideology,
-        leaderName: isCapital ? nation.leader.name : genPersonName(),
+        leaderName: isCapital ? nation.leader.name : genPersonName(nation.culture),
         leaderRace: randomRace(),
         founded: simTime,
       };
@@ -1289,6 +1616,17 @@
         else if (currentTool === 'mountain') { cellType[i] = T_MOUNTAIN; resource[i] = 0; isRiver[i] = 0; }
       }
     }
+    // if the land under a settlement was just drowned, the settlement goes with it
+    if (currentTool === 'ocean') {
+      const drownedIds = new Set(
+        settlements.filter((s) => cellType[idx(Math.floor(s.x), Math.floor(s.y))] === T_OCEAN).map((s) => s.id)
+      );
+      if (drownedIds.size) {
+        settlements = settlements.filter((s) => !drownedIds.has(s.id));
+        for (const nation of nations) nation.settlementIds = nation.settlementIds.filter((id) => !drownedIds.has(id));
+        recomputeTerritory();
+      }
+    }
   }
   function bindPointer() {
     entityCanvas.addEventListener('pointerdown', (ev) => {
@@ -1312,6 +1650,18 @@
   }
 
   function bindUI() {
+    // Event delegation: the nation list's <li> elements are replaced by
+    // innerHTML on every refresh, so a per-item listener would be lost --
+    // bind once on the container instead. Clicking the already-selected
+    // nation again deselects it (same toggle-off pattern as the tools).
+    document.getElementById('civNationList').addEventListener('click', (ev) => {
+      const row = ev.target.closest('.civNationRow');
+      if (!row) return;
+      const id = Number(row.dataset.nationid);
+      selectedNationId = selectedNationId === id ? null : id;
+      updateNationList();
+    });
+
     document.querySelectorAll('.civToolBtn').forEach((btn) => {
       btn.addEventListener('click', () => {
         const wasActive = btn.classList.contains('active');

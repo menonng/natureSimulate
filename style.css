@@ -486,6 +486,14 @@ input[type=range]::-moz-range-thumb{
 }
 .civNationList .civNationEmpty{color:var(--ink-dim); font-style:italic;}
 .civNationList .civMeta{color:var(--ink-dim); font-size:.62rem;}
+.civNationList .civNationRow{
+  cursor:pointer;
+  padding:2px 4px;
+  margin:0 -4px;
+  border-radius:5px;
+}
+.civNationList .civNationRow:hover{background:rgba(217,166,43,.1);}
+.civNationList .civNationRow.selected{background:rgba(217,166,43,.2); box-shadow:0 0 0 1px var(--gold-dim) inset;}
 
 #civSliderRow{
   display:flex;
@@ -582,7 +590,17 @@ input[type=range]::-moz-range-thumb{
 .civDiploNationHead .civSwatch{width:9px; height:9px; border-radius:50%; flex:none; margin-top:.15em;}
 .civDiploNationHead b{color:var(--ink);}
 .civDiploNationHead .civMeta{color:var(--ink-dim); font-size:.64rem;}
-.civDiploSection{margin-top:7px;}
+.civDiploNationHead b{font-size:.82rem;}
+.civDiploStatGrid{
+  display:grid;
+  grid-template-columns:auto 1fr;
+  gap:3px 12px;
+  margin:8px 0 0;
+  font-size:.68rem;
+}
+.civDiploStatGrid dt{color:var(--ink-dim);}
+.civDiploStatGrid dd{margin:0; color:var(--ink);}
+.civDiploSection{margin-top:9px;}
 .civDiploSectionTitle{
   color:var(--ink-dim);
   font-size:.6rem;
@@ -603,14 +621,19 @@ input[type=range]::-moz-range-thumb{
 .civRelChip.rel-neutral{background:rgba(185,172,147,.12); border-color:#5a5142; color:var(--ink-dim);}
 .civRelChip.rel-tense{background:rgba(255,126,0,.16); border-color:var(--orange); color:var(--orange);}
 .civRelChip.rel-war{background:rgba(255,0,69,.18); border-color:var(--red); color:var(--red);}
-.civDiploRegionRow{
-  display:flex;
-  justify-content:space-between;
-  gap:8px;
-  padding:2px 0;
+.civRelRowDetail{margin-top:4px; opacity:.75;}
+.civDiploTable{width:100%; border-collapse:collapse; font-size:.66rem;}
+.civDiploTable th{
   color:var(--ink-dim);
+  text-align:left;
+  font-weight:normal;
+  padding:2px 6px 5px 0;
+  border-bottom:1px solid #3a3128;
 }
-.civDiploRegionRow .civDiploDiverged{color:var(--pink);}
+.civDiploTable td{padding:3px 6px 3px 0; border-bottom:1px solid #221d16; color:var(--ink);}
+.civDiploTable tr:last-child td{border-bottom:none;}
+.civDiploTable tr.civDiploDivergedRow td{color:var(--pink);}
+.civDiploTable td.civDiploEmpty{color:var(--ink-dim); font-style:italic;}
 
 .civSpeechEntry{
   border:1px solid #2a231b;
@@ -628,3 +651,34 @@ input[type=range]::-moz-range-thumb{
 .civSpeechHead b{color:var(--ink);}
 .civSpeechHead .civMeta{color:var(--ink-dim); font-size:.62rem;}
 .civSpeechText{color:var(--ink); font-style:italic; line-height:1.4;}
+
+.civToastContainer{
+  position:fixed;
+  right:16px;
+  bottom:16px;
+  display:flex;
+  flex-direction:column-reverse;
+  gap:8px;
+  z-index:90;
+  pointer-events:none;
+  max-width:300px;
+}
+.civToast{
+  background:var(--panel-bg);
+  border:1px solid var(--gold-dim);
+  box-shadow:0 4px 16px rgba(0,0,0,.55);
+  border-radius:8px;
+  padding:8px 12px;
+  font-size:.7rem;
+  line-height:1.35;
+  color:var(--ink);
+  opacity:0;
+  transform:translateX(24px);
+  transition:opacity .3s ease, transform .3s ease;
+}
+.civToast.show{opacity:1; transform:translateX(0);}
+.civToast.toast-birth{border-color:var(--green);}
+.civToast.toast-fall{border-color:var(--ink-dim);}
+.civToast.toast-power{border-color:var(--orange);}
+.civToast.toast-war{border-color:var(--red);}
+.civToast.toast-nuke{border-color:var(--red); box-shadow:0 4px 20px rgba(255,0,69,.35);}

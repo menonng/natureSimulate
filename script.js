@@ -480,6 +480,15 @@ function updateFox(e, dt, spawnList) {
       entities[preyK]._dead = true;
       e.energy += 5; // nerfed: less energy per catch
       playCaptureSound();
+
+      // Only meat lets a fox breed - grass just keeps it fed.
+      if (e.energy > 12 && e.cooldown <= 0 && countType('fox') < FOX_CAP) {
+        e.energy -= 7;
+        e.cooldown = 10;
+        spawnList.push(makeChild(e, 'fox'));
+        tickEvents.push({ type: 'fox', delta: 1 });
+        playBreedSound();
+      }
     } else {
       const dx = p.x - e.x, dy = p.y - e.y;
       e.vx = (dx / d) * 2.6; // buffed: faster than a fleeing rabbit -> guaranteed catch
@@ -487,15 +496,14 @@ function updateFox(e, dt, spawnList) {
       tryMove(e, dt);
     }
   } else {
+    // No rabbit around to chase - foxes are omnivores and will graze to
+    // survive, but grass alone never earns them a breeding chance.
+    if (cellType[i] === 0 && grass[i] > 0.04) {
+      const eat = Math.min(grass[i], 0.15 * dt);
+      grass[i] -= eat;
+      e.energy += eat * 2.0;
+    }
     steerRandom(e, 1.3, dt);
-  }
-
-  if (e.energy > 15 && e.cooldown <= 0 && countType('fox') < FOX_CAP) { // nerfed: breeds later
-    e.energy -= 7;
-    e.cooldown = 10;
-    spawnList.push(makeChild(e, 'fox'));
-    tickEvents.push({ type: 'fox', delta: 1 });
-    playBreedSound();
   }
   return e.energy > 0;
 }
@@ -508,27 +516,50 @@ function updateHawk(e, dt, spawnList) {
   if (e.diveCap === undefined) { e.diveCap = Math.random() < 0.5 ? 1 : 2; e.diveKills = 0; e.huntCooldown = 0; }
   if (e.huntCooldown > 0) e.huntCooldown -= dt;
 
-  // no food-detection range: only strikes prey already within range
-  const preyK = findNearest(e.x, e.y, 0.9, (o) => (o.type === 'rabbit' || o.type === 'fox'));
-  if (preyK >= 0 && e.huntCooldown <= 0 && Math.random() < 0.25) {
+  // Reactive chase within striking range (not a long-distance hunting
+  // search): closes in at hunting speed, then strikes once adjacent.
+  const preyK = findNearest(e.x, e.y, 7, (o) => (o.type === 'rabbit' || o.type === 'fox'));
+  if (preyK >= 0) {
     const p = entities[preyK];
-    entities[preyK]._dead = true;
-    e.energy += p.type === 'rabbit' ? 7 : 10; // nerfed: less energy per catch
-    playCaptureSound();
-    e.diveKills++;
-    if (e.diveKills >= e.diveCap) {
-      e.huntCooldown = rand(28, 49);
-      e.diveKills = 0;
-      e.diveCap = Math.random() < 0.5 ? 1 : 2;
-    }
-  }
+    const d = Math.hypot(p.x - e.x, p.y - e.y);
+    if (d < 0.9) {
+      if (e.huntCooldown <= 0 && Math.random() < 0.25) {
+        entities[preyK]._dead = true;
+        e.energy += p.type === 'rabbit' ? 7 : 10; // nerfed: less energy per catch
+        playCaptureSound();
+        e.diveKills++;
 
-  e.vx += rand(-0.3, 0.3);
-  e.vy += rand(-0.3, 0.3);
-  const len = Math.hypot(e.vx, e.vy) || 1;
-  e.vx = (e.vx / len) * 1.4;
-  e.vy = (e.vy / len) * 1.4;
-  tryMove(e, dt);
+        // Breeding-at-the-kill: a fox catch is worth 2x a rabbit catch's
+        // breeding chance. This runs alongside (not instead of) the
+        // ordinary energy-threshold breeding check below.
+        const breedChance = p.type === 'fox' ? 0.24 : 0.12;
+        if (e.energy > 14 && e.cooldown <= 0 && countType('hawk') < HAWK_CAP && Math.random() < breedChance) {
+          e.energy -= 14;
+          e.cooldown = 24;
+          spawnList.push(makeChild(e, 'hawk'));
+          tickEvents.push({ type: 'hawk', delta: 1 });
+          playBreedSound();
+        }
+
+        if (e.diveKills >= e.diveCap) {
+          e.huntCooldown = rand(28, 49);
+          e.diveKills = 0;
+          e.diveCap = Math.random() < 0.5 ? 1 : 2;
+        }
+      }
+    } else {
+      e.vx = (p.x - e.x) / d * 2.8; // hunting speed: 2x the hawk's previous speed
+      e.vy = (p.y - e.y) / d * 2.8;
+      tryMove(e, dt);
+    }
+  } else {
+    e.vx += rand(-0.3, 0.3);
+    e.vy += rand(-0.3, 0.3);
+    const len = Math.hypot(e.vx, e.vy) || 1;
+    e.vx = (e.vx / len) * 3.9; // movement speed: 1.5x a fox's hunting speed
+    e.vy = (e.vy / len) * 3.9;
+    tryMove(e, dt);
+  }
   trySeedFromAnimal(cellAt(e.x, e.y), 0.006 * dt); // a dropped seed, very rare
 
   if (e.energy > 26 && e.cooldown <= 0 && countType('hawk') < HAWK_CAP) { // nerfed: breeds later
@@ -695,11 +726,16 @@ function renderTerrain() {
         g = lerp(COLORS.landDark[1], COLORS.grassBright[1], shade) + texVar;
         b = lerp(COLORS.landDark[2], COLORS.grassBright[2], shade) + texVar * 0.4;
       } else if (type === 1) {
-        const ripple = (Math.sin(x * 0.35 + t * 1.6) + Math.sin(y * 0.3 - t * 1.1)) * 0.5;
-        const m = ripple > 0.55 ? 1 : 0;
-        r = lerp(COLORS.water[0], COLORS.waterHi[0], m * 0.5);
-        g = lerp(COLORS.water[1], COLORS.waterHi[1], m * 0.5);
-        b = lerp(COLORS.water[2], COLORS.waterHi[2], m * 0.5);
+        // Flowing water: layered waves that scroll along the river's flow
+        // direction and blend smoothly (no hard cutoff), so it reads as a
+        // moving current instead of a static spotted/dotted pattern.
+        const flow = Math.sin(x * 0.18 - t * 2.4) * 0.4
+                   + Math.sin(x * 0.45 + y * 0.10 - t * 3.6) * 0.35
+                   + Math.sin(y * 0.3 + t * 1.0) * 0.25;
+        const m = clamp(flow * 0.5 + 0.5, 0, 1);
+        r = lerp(COLORS.water[0], COLORS.waterHi[0], m * 0.55);
+        g = lerp(COLORS.water[1], COLORS.waterHi[1], m * 0.55);
+        b = lerp(COLORS.water[2], COLORS.waterHi[2], m * 0.55);
       } else if (type === 2) {
         const flick = 0.5 + 0.5 * Math.sin(t * 14 + (x * 7 + y * 13) % 17);
         r = lerp(COLORS.burningHot[0], COLORS.burning[0], flick);

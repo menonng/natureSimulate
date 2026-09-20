@@ -17,9 +17,11 @@ const BUCKET_ROWS = Math.ceil(ROWS / BUCKET_SIZE);
 const BURN_DURATION = 3.5;        // seconds a cell stays actively burning
 const BURNT_RECOVERY = 55;        // seconds before burnt land can regrow
 
-const RABBIT_CAP = 360;
-const FOX_CAP = 82;
-const HAWK_CAP = 18;
+// No population ceiling - breeding and manual placement are limited only
+// by energy/cooldown/food, not an artificial headcount.
+const RABBIT_CAP = Infinity;
+const FOX_CAP = Infinity;
+const HAWK_CAP = Infinity;
 
 const COLORS = {
   landDark: [21, 46, 17],
@@ -61,6 +63,11 @@ let tickCount = 0;
 const trailVisible = { rabbit: false, fox: false, hawk: false };
 const TRAIL_MAX_POINTS = 16;
 const TRAIL_RECORD_EVERY = 3; // ticks
+
+// Births/deaths that happened during the current tick, so several
+// simultaneous events can be unrolled into one graph point each (see
+// sampleHistory) instead of one big vertical jump.
+let tickEvents = [];
 
 const history = []; // {r,f,h,g}
 // Sample every simulation tick (the smallest time unit the sim has) so the
@@ -374,6 +381,8 @@ function tickEntities(dt) {
         e.trail.length = 0; // toggled off - stop showing a stale trail
       }
       next.push(e);
+    } else {
+      tickEvents.push({ type: e.type, delta: -1 }); // starved / burned / drowned
     }
   }
   entities = next;
@@ -447,6 +456,7 @@ function updateRabbit(e, dt, spawnList) {
     e.energy -= 3;
     e.cooldown = 4.5;
     spawnList.push(makeChild(e, 'rabbit'));
+    tickEvents.push({ type: 'rabbit', delta: 1 });
     playBreedSound();
   }
   return e.energy > 0;
@@ -484,6 +494,7 @@ function updateFox(e, dt, spawnList) {
     e.energy -= 7;
     e.cooldown = 10;
     spawnList.push(makeChild(e, 'fox'));
+    tickEvents.push({ type: 'fox', delta: 1 });
     playBreedSound();
   }
   return e.energy > 0;
@@ -524,6 +535,7 @@ function updateHawk(e, dt, spawnList) {
     e.energy -= 14;
     e.cooldown = 24;
     spawnList.push(makeChild(e, 'hawk'));
+    tickEvents.push({ type: 'hawk', delta: 1 });
     playBreedSound();
   }
   return e.energy > 0;
@@ -547,7 +559,11 @@ function countType(type) {
 }
 
 function purgeDead() {
-  entities = entities.filter((e) => !e._dead);
+  entities = entities.filter((e) => {
+    if (!e._dead) return true;
+    tickEvents.push({ type: e.type, delta: -1 }); // eaten
+    return false;
+  });
 }
 
 function tick() {
@@ -574,8 +590,31 @@ function sampleHistory() {
     if (cellType[i] === 0) { gsum += grass[i]; gn++; }
   }
   const g = gn ? gsum / gn : 0;
-  history.push({ r, f, h, g });
-  if (history.length > HISTORY_MAX) history.shift();
+
+  if (tickEvents.length === 0) {
+    history.push({ r, f, h, g });
+  } else {
+    // Several births/deaths can land in the same tick (a wildfire wiping
+    // out a dozen rabbits, a breeding burst, ...). Rather than one vertical
+    // jump, walk back to the counts from before this tick's events, then
+    // replay them one at a time so each individual event gets its own
+    // point and the line rises/falls smoothly.
+    let cr = r, cf = f, ch = h;
+    for (let i = tickEvents.length - 1; i >= 0; i--) {
+      const ev = tickEvents[i];
+      if (ev.type === 'rabbit') cr -= ev.delta;
+      else if (ev.type === 'fox') cf -= ev.delta;
+      else ch -= ev.delta;
+    }
+    for (const ev of tickEvents) {
+      if (ev.type === 'rabbit') cr += ev.delta;
+      else if (ev.type === 'fox') cf += ev.delta;
+      else ch += ev.delta;
+      history.push({ r: cr, f: cf, h: ch, g });
+    }
+    tickEvents = [];
+  }
+  if (history.length > HISTORY_MAX) history.splice(0, history.length - HISTORY_MAX);
   updateCounts(r, f, h, g);
 }
 

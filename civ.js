@@ -59,6 +59,12 @@
   let isRiver = new Uint8Array(COLS * ROWS);
   let resource = new Float32Array(COLS * ROWS);
   let texNoise = new Float32Array(COLS * ROWS);
+  // -1 = unclaimed; otherwise a nation id. One entry per land cell, giving
+  // territory hard, pixel-square borders (no smoothing) at the grid's own
+  // resolution, recomputed as a per-cell nearest-settlement claim.
+  let territory = new Int32Array(COLS * ROWS).fill(-1);
+  let territoryAccum = 0;
+  const TERRITORY_INTERVAL = 2.5; // simulated seconds between automatic recomputes
 
   let people = [];      // free-roaming, not yet settled
   let settlements = [];
@@ -116,10 +122,46 @@
   }
 
   const NATION_HUES = [355, 25, 48, 100, 175, 210, 265, 320, 15, 130, 195, 285];
+  function hslToRgb(h, s, l) {
+    s /= 100; l /= 100;
+    const k = (n) => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = (n) => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    return [Math.round(f(0) * 255), Math.round(f(8) * 255), Math.round(f(4) * 255)];
+  }
   function nextNationColor() {
     const hue = NATION_HUES[nextNationHue % NATION_HUES.length];
     nextNationHue++;
-    return `hsl(${hue}, 62%, 58%)`;
+    return { css: `hsl(${hue}, 62%, 58%)`, rgb: hslToRgb(hue, 62, 58) };
+  }
+
+  // ---------- RACES ------------------------------------------------------
+  // Two playable peoples, one per source sprite character. Purely a visual +
+  // demographic trait (sprite art, name, territory/nation-list bookkeeping) --
+  // it does not affect individual AI behavior.
+  const RACES = [
+    { id: 0, name: '묘인족', frameSrc: ['assets/sprites/race0_walk0.png', 'assets/sprites/race0_walk1.png'] },
+    { id: 1, name: '인간족', frameSrc: ['assets/sprites/race1_walk0.png', 'assets/sprites/race1_walk1.png'] },
+  ];
+  for (const race of RACES) {
+    race.images = race.frameSrc.map((src) => {
+      const img = new Image();
+      img.src = src;
+      return img;
+    });
+  }
+  function randomRace() { return rng() < 0.5 ? 0 : 1; }
+  function pickRaceFromComposition(comp) {
+    if (!comp) return randomRace();
+    let total = 0;
+    for (const c of comp) total += c;
+    if (total <= 0) return randomRace();
+    let r = rng() * total;
+    for (let i = 0; i < comp.length; i++) {
+      r -= comp[i];
+      if (r <= 0) return i;
+    }
+    return comp.length - 1;
   }
 
   // ---------- TERRAIN GENERATION -------------------------------------------
@@ -229,6 +271,8 @@
     nextNationHue = 0;
     history.length = 0;
     simTime = 0;
+    territory = new Int32Array(COLS * ROWS).fill(-1);
+    territoryAccum = 0;
 
     // scatter starting population on livable land, away from ocean/mountain
     let placed = 0, guard = 0;
@@ -237,14 +281,14 @@
       const x = rrandInt(0, COLS - 1), y = rrandInt(0, ROWS - 1);
       const t = cellType[idx(x, y)];
       if (t !== T_PLAINS && t !== T_COAST) continue;
-      addPerson(x + 0.5, y + 0.5);
+      addPerson(x + 0.5, y + 0.5, randomRace());
       placed++;
     }
   }
 
-  function addPerson(x, y) {
+  function addPerson(x, y, race) {
     people.push({
-      id: nextId++, x, y,
+      id: nextId++, x, y, race: race === undefined ? randomRace() : race,
       vx: rrand(-1, 1), vy: rrand(-1, 1),
       energy: rrand(4, 7), age: 0, cooldown: rrand(0, 6),
     });
@@ -285,10 +329,12 @@
   function foundNation(x, y) {
     const ideology = pick(IDEOLOGIES);
     const dynasty = genFamilyName();
+    const colorInfo = nextNationColor();
     const nation = {
       id: nextId++,
       name: genNationName(),
-      color: nextNationColor(),
+      color: colorInfo.css,
+      rgb: colorInfo.rgb,
       ideology,
       dynasty,
       leader: genLeader(dynasty),
@@ -298,6 +344,7 @@
       settlementIds: [],
       civLevel: 1,
       totalPopulation: 0,
+      raceTotals: new Array(RACES.length).fill(0),
     };
     nations.push(nation);
     return nation;
@@ -313,6 +360,32 @@
       }
     }
     return best;
+  }
+
+  // ---------- TERRITORY ---------------------------------------------------
+  // Each settlement claims land within a reach that grows with its
+  // population (capitals get a bonus); every land cell is assigned to
+  // whichever settlement's claim scores highest there, and inherits that
+  // settlement's nation. Ocean is never claimed.
+  function recomputeTerritory() {
+    territory.fill(-1);
+    if (!settlements.length) return;
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        const i = idx(x, y);
+        if (cellType[i] === T_OCEAN) continue;
+        const cx = x + 0.5, cy = y + 0.5;
+        let bestNationId = -1, bestScore = -Infinity;
+        for (const s of settlements) {
+          const reach = 10 + Math.sqrt(s.population) * 1.6 + (s.isCapital ? 8 : 0);
+          const d = Math.hypot(s.x - cx, s.y - cy);
+          if (d > reach) continue;
+          const score = reach - d;
+          if (score > bestScore) { bestScore = score; bestNationId = s.nationId; }
+        }
+        territory[i] = bestNationId;
+      }
+    }
   }
 
   // ---------- SETTLEMENTS -----------------------------------------------
@@ -336,22 +409,29 @@
 
       // found it: absorb nearby free people into the new settlement's population
       let absorbed = 0;
+      const raceCounts = new Array(RACES.length).fill(0);
       const remaining = [];
       for (const person of people) {
-        if (Math.hypot(person.x - p.x, person.y - p.y) <= SETTLE_RADIUS && absorbed < 12) { absorbed++; }
-        else remaining.push(person);
+        if (Math.hypot(person.x - p.x, person.y - p.y) <= SETTLE_RADIUS && absorbed < 12) {
+          absorbed++;
+          raceCounts[person.race]++;
+        } else remaining.push(person);
       }
       people = remaining;
+      if (absorbed === 0) raceCounts[p.race]++;
 
       let nation = nearestNation(p.x, p.y);
       let isCapital = false;
       if (!nation) { nation = foundNation(p.x, p.y); isCapital = true; }
 
+      const population = Math.max(6, absorbed);
+      const raceSum = raceCounts.reduce((a, b) => a + b, 0) || 1;
       const settlement = {
         id: nextId++, x: p.x, y: p.y,
         name: genPersonName() + pick(['성', '촌', '항', '진']),
         nationId: nation.id,
-        population: Math.max(6, absorbed),
+        population,
+        raceComposition: raceCounts.map((c) => (c / raceSum) * population),
         isCity: false, isCapital,
         leaderTitle: isCapital ? LEADER_TITLE[nation.ideology] : REGIONAL_TITLE[nation.ideology],
         leaderName: isCapital ? nation.leader.name : genPersonName(),
@@ -379,7 +459,11 @@
       avgRes = n ? avgRes / n : 0.1;
 
       const growth = (avgRes - 0.32) * params.growthRate * 0.02; // nerfed relative to ecosystem breeding rates
-      s.population = Math.max(0, s.population * (1 + growth * dt));
+      const growthFactor = Math.max(0, 1 + growth * dt);
+      s.population = Math.max(0, s.population * growthFactor);
+      if (s.raceComposition) {
+        for (let ri = 0; ri < s.raceComposition.length; ri++) s.raceComposition[ri] *= growthFactor;
+      }
       // settlements consume a little local resource as they grow
       for (let dy = -2; dy <= 2; dy++) {
         for (let dx = -2; dx <= 2; dx++) {
@@ -401,8 +485,15 @@
         const nx = clamp(s.x + Math.cos(ang) * dist, 1, COLS - 2);
         const ny = clamp(s.y + Math.sin(ang) * dist, 1, ROWS - 2);
         if (cellType[idx(Math.floor(nx), Math.floor(ny))] !== T_OCEAN) {
-          for (let i = 0; i < 4; i++) addPerson(nx + rrand(-1, 1), ny + rrand(-1, 1));
+          for (let i = 0; i < 4; i++) {
+            addPerson(nx + rrand(-1, 1), ny + rrand(-1, 1), pickRaceFromComposition(s.raceComposition));
+          }
+          const oldPop = s.population;
           s.population = Math.max(4, s.population - 4);
+          if (s.raceComposition && oldPop > 0) {
+            const ratio = s.population / oldPop;
+            for (let ri = 0; ri < s.raceComposition.length; ri++) s.raceComposition[ri] *= ratio;
+          }
         }
       }
     }
@@ -419,11 +510,18 @@
     for (const nation of nations) {
       nation.age += dt;
       let pop = 0;
+      const raceTotals = new Array(RACES.length).fill(0);
       for (const sid of nation.settlementIds) {
         const s = settlements.find((s) => s.id === sid);
-        if (s) pop += s.population;
+        if (s) {
+          pop += s.population;
+          if (s.raceComposition) {
+            for (let ri = 0; ri < RACES.length; ri++) raceTotals[ri] += s.raceComposition[ri] || 0;
+          }
+        }
       }
       nation.totalPopulation = pop;
+      nation.raceTotals = raceTotals;
       nation.civLevel = clamp(1 + Math.floor(pop / 180) + Math.floor(nation.age / 260) + Math.floor(nation.settlementIds.length / 3), 1, 5);
       nation.faith = clamp(nation.faith + 0.0004 * dt * (1 + nation.civLevel * 0.2), 0, 1);
 
@@ -490,7 +588,7 @@
     if (p.energy > 9 && p.cooldown <= 0) {
       p.energy -= 6;
       p.cooldown = 30;
-      addPerson(clamp(p.x + rrand(-1, 1), 0, COLS - 1), clamp(p.y + rrand(-1, 1), 0, ROWS - 1));
+      addPerson(clamp(p.x + rrand(-1, 1), 0, COLS - 1), clamp(p.y + rrand(-1, 1), 0, ROWS - 1), p.race);
     }
     return p.energy > 0;
   }
@@ -519,6 +617,12 @@
     tickSettlements(TICK_DT);
     tickNations(TICK_DT);
     simTime += TICK_DT;
+
+    territoryAccum += TICK_DT;
+    if (territoryAccum >= TERRITORY_INTERVAL) {
+      territoryAccum = 0;
+      recomputeTerritory();
+    }
 
     sampleAccum += TICK_DT;
     if (sampleAccum >= SAMPLE_INTERVAL) {
@@ -557,6 +661,9 @@
 
   function renderTerrain() {
     const data = terrainImage.data;
+    const nationRgbById = new Map();
+    for (const n of nations) nationRgbById.set(n.id, n.rgb);
+    const TERRITORY_TINT = 0.32;
     for (let i = 0; i < cellType.length; i++) {
       const p = i * 4;
       const t = cellType[i];
@@ -584,6 +691,14 @@
       } else {
         r = COL.snow[0]; g = COL.snow[1]; b = COL.snow[2];
       }
+      if (territory[i] >= 0) {
+        const nrgb = nationRgbById.get(territory[i]);
+        if (nrgb) {
+          r = r + (nrgb[0] - r) * TERRITORY_TINT;
+          g = g + (nrgb[1] - g) * TERRITORY_TINT;
+          b = b + (nrgb[2] - b) * TERRITORY_TINT;
+        }
+      }
       data[p] = clamp(r, 0, 255);
       data[p + 1] = clamp(g, 0, 255);
       data[p + 2] = clamp(b, 0, 255);
@@ -598,11 +713,27 @@
     const sx = w / COLS, sy = h / ROWS;
     const cellPx = Math.min(sx, sy);
 
+    const WALK_FPS = 3.2; // walk-cycle frame swaps per second
+    const spriteH = clamp(cellPx * 4.5, 8, 34);
     ectx.fillStyle = '#f1e9d8';
     for (const p of people) {
-      ectx.beginPath();
-      ectx.arc(p.x * sx, p.y * sy, Math.max(1, cellPx * 0.5), 0, Math.PI * 2);
-      ectx.fill();
+      const race = RACES[p.race] || RACES[0];
+      const frameIdx = Math.floor((simTime + p.id * 0.53) * WALK_FPS) % 2;
+      const img = race.images[frameIdx];
+      const px = p.x * sx, py = p.y * sy;
+      if (img && img.complete && img.naturalWidth) {
+        const w = spriteH * (img.naturalWidth / img.naturalHeight);
+        ectx.save();
+        ectx.translate(px, py);
+        if (p.vx > 0.02) ectx.scale(-1, 1); // sprites face left by default
+        ectx.drawImage(img, -w / 2, -spriteH, w, spriteH);
+        ectx.restore();
+      } else {
+        // fallback dot while the sprite images are still loading
+        ectx.beginPath();
+        ectx.arc(px, py, Math.max(1, cellPx * 0.5), 0, Math.PI * 2);
+        ectx.fill();
+      }
     }
 
     for (const s of settlements) {
@@ -672,9 +803,19 @@
     list.innerHTML = sorted.slice(0, 12).map((n) => {
       const tier = CIV_TIER_NAME[n.civLevel] || '';
       const L = n.leader;
+      const raceTotals = n.raceTotals || [];
+      let domIdx = 0, raceSum = 0;
+      for (let ri = 0; ri < raceTotals.length; ri++) {
+        raceSum += raceTotals[ri];
+        if (raceTotals[ri] > (raceTotals[domIdx] || 0)) domIdx = ri;
+      }
+      const domRacePct = raceSum > 0 ? Math.round((raceTotals[domIdx] / raceSum) * 100) : 0;
+      const domRaceName = RACES[domIdx] ? RACES[domIdx].name : '';
       return `<li><span class="civSwatch" style="background:${n.color}"></span>` +
         `<span><b>${n.name}</b> (${n.dynasty}) · ${LEADER_TITLE[n.ideology]} ${L.name} · ${n.ideology} · ${n.religion}(${Math.round(n.faith * 100)}%)` +
-        `<br><span class="civMeta">${L.personality}·${L.philosophy}주의 지도자 · Lv.${n.civLevel} ${tier} · 인구 ${Math.round(n.totalPopulation)} · 정착지 ${n.settlementIds.length}</span></span></li>`;
+        `<br><span class="civMeta">${L.personality}·${L.philosophy}주의 지도자 · Lv.${n.civLevel} ${tier} · 인구 ${Math.round(n.totalPopulation)} · 정착지 ${n.settlementIds.length}` +
+        (raceSum > 0 ? ` · 다수종족 ${domRaceName} ${domRacePct}%` : '') +
+        `</span></span></li>`;
     }).join('');
   }
 
@@ -713,13 +854,16 @@
       const settlement = {
         id: nextId++, x: x + 0.5, y: y + 0.5,
         name: genPersonName() + pick(['성', '촌', '항', '진']),
-        nationId: nation.id, population: 10, isCity: false, isCapital,
+        nationId: nation.id, population: 10,
+        raceComposition: [5, 5],
+        isCity: false, isCapital,
         leaderTitle: isCapital ? LEADER_TITLE[nation.ideology] : REGIONAL_TITLE[nation.ideology],
         leaderName: isCapital ? nation.leader.name : genPersonName(),
         founded: simTime,
       };
       settlements.push(settlement);
       nation.settlementIds.push(settlement.id);
+      recomputeTerritory();
       return;
     }
     if (currentTool === 'erase') {
@@ -731,6 +875,7 @@
         if (nation) nation.settlementIds = nation.settlementIds.filter((id) => id !== s.id);
         return false;
       });
+      recomputeTerritory();
       return;
     }
     // terrain paint tools

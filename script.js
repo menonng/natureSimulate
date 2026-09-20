@@ -432,8 +432,8 @@ function updateRabbit(e, dt, spawnList) {
     const f = entities[foxK];
     const dx = e.x - f.x, dy = e.y - f.y;
     const len = Math.hypot(dx, dy) || 1;
-    e.vx = (dx / len) * 2.4; // nerfed: slower flee
-    e.vy = (dy / len) * 2.4;
+    e.vx = (dx / len) * 1.6; // nerfed: slower flee
+    e.vy = (dy / len) * 1.6;
     tryMove(e, dt);
   } else {
     // no food-detection range: wanders randomly, only eats grass it happens to be on
@@ -456,14 +456,26 @@ function updateFox(e, dt, spawnList) {
   if (tryDrown(i, dt)) return false;
   trySeedFromAnimal(i, 0.12 * dt);
 
-  // no food-detection range: only catches a rabbit already within striking distance
-  const preyK = findNearest(e.x, e.y, 0.8, (o) => o.type === 'rabbit');
+  // Foxes don't search for prey from afar, but once a rabbit is close enough
+  // to be mutually aware of (the same radius a rabbit uses to notice a fox),
+  // the fox gives chase - and is fast enough to always run it down.
+  const preyK = findNearest(e.x, e.y, 7, (o) => o.type === 'rabbit');
   if (preyK >= 0) {
-    entities[preyK]._dead = true;
-    e.energy += 5; // nerfed: less energy per catch
-    playCaptureSound();
+    const p = entities[preyK];
+    const d = Math.hypot(p.x - e.x, p.y - e.y);
+    if (d < 0.8) {
+      entities[preyK]._dead = true;
+      e.energy += 5; // nerfed: less energy per catch
+      playCaptureSound();
+    } else {
+      const dx = p.x - e.x, dy = p.y - e.y;
+      e.vx = (dx / d) * 2.6; // buffed: faster than a fleeing rabbit -> guaranteed catch
+      e.vy = (dy / d) * 2.6;
+      tryMove(e, dt);
+    }
+  } else {
+    steerRandom(e, 1.3, dt);
   }
-  steerRandom(e, 1.3, dt);
 
   if (e.energy > 15 && e.cooldown <= 0 && countType('fox') < FOX_CAP) { // nerfed: breeds later
     e.energy -= 7;
@@ -475,7 +487,7 @@ function updateFox(e, dt, spawnList) {
 }
 
 function updateHawk(e, dt, spawnList) {
-  e.energy -= 0.24 * dt; // nerfed: hungrier
+  e.energy -= 0.14 * dt; // longer lifespan: burns energy much more slowly
 
   // A hawk can only take 1-2 kills per dive, then must climb back up
   // (huntCooldown) before it is allowed to strike again.

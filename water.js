@@ -172,6 +172,25 @@ async function initWaterTank() {
   waterMesh.position.y = WATER_REST_Y;
   scene.add(waterMesh);
 
+  // The animated plane above is just the ripple surface - fill the volume
+  // underneath it down to the floor so the tank reads as actually full of
+  // water (visible sides/bottom) instead of a thin floating sheet.
+  const bodyTop = WATER_REST_Y - 0.05; // just under the surface mesh, avoids z-fighting
+  const bodyBottom = -0.4; // matches the floor height
+  const waterBody = new THREE.Mesh(
+    new THREE.BoxGeometry(TANK_SIZE * 0.94, bodyTop - bodyBottom, TANK_SIZE * 0.94),
+    new THREE.MeshPhysicalMaterial({
+      color: 0x1c4a78,
+      transparent: true,
+      opacity: 0.75,
+      roughness: 0.25,
+      metalness: 0,
+      side: THREE.DoubleSide,
+    })
+  );
+  waterBody.position.y = (bodyTop + bodyBottom) / 2;
+  scene.add(waterBody);
+
   // invisible plane used purely for raycasting clicks at the water's rest height
   const rayPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -WATER_REST_Y);
 
@@ -195,8 +214,8 @@ async function initWaterTank() {
   let pressing = false;
   let pressStart = 0;
   let pressGX = 0, pressGZ = 0;
-  const MAX_HOLD_SECONDS = 2.2;
-  const MIN_STRENGTH = 0.5, MAX_STRENGTH = 4.2;
+  const MIN_STRENGTH = 0.5;
+  const RAMP_RATE = 1.68; // strength added per second held - no upper cap
 
   function raycastToGrid(clientX, clientY) {
     const rect = canvas.getBoundingClientRect();
@@ -229,8 +248,7 @@ async function initWaterTank() {
     if (!pressing) return;
     pressing = false;
     const held = (performance.now() - pressStart) / 1000;
-    const t = Math.min(1, held / MAX_HOLD_SECONDS);
-    const strength = MIN_STRENGTH + (MAX_STRENGTH - MIN_STRENGTH) * t;
+    const strength = MIN_STRENGTH + held * RAMP_RATE; // grows the longer you hold, unbounded
     splashAt(pressGX, pressGZ, strength);
     playSplashSound(strength);
   }

@@ -532,7 +532,7 @@ function updateHawk(e, dt, spawnList) {
         // Breeding-at-the-kill: a fox catch is worth 2x a rabbit catch's
         // breeding chance. This runs alongside (not instead of) the
         // ordinary energy-threshold breeding check below.
-        const breedChance = p.type === 'fox' ? 0.24 : 0.12;
+        const breedChance = p.type === 'fox' ? 0.12 : 0.06; // halved, still 2x for a fox catch
         if (e.energy > 14 && e.cooldown <= 0 && countType('hawk') < HAWK_CAP && Math.random() < breedChance) {
           e.energy -= 14;
           e.cooldown = 24;

@@ -65,6 +65,8 @@
   let territory = new Int32Array(COLS * ROWS).fill(-1);
   let territoryAccum = 0;
   const TERRITORY_INTERVAL = 2.5; // simulated seconds between automatic recomputes
+  let warAccum = 0;
+  const WAR_CHECK_INTERVAL = 1.4; // simulated seconds between raid checks
 
   let people = [];      // free-roaming, not yet settled
   let settlements = [];
@@ -126,8 +128,10 @@
   // ideology affinity and leader personality plus a little noise, with
   // rare sharper "incidents". Thresholded into a label for display.
   let relations = new Map();
+  let relationCls = new Map(); // previous tick's label class, for edge-detecting war/alliance
   function relationKey(a, b) { return a < b ? `${a}_${b}` : `${b}_${a}`; }
   function getRelation(aId, bId) { return relations.get(relationKey(aId, bId)) ?? 0; }
+  function isAtWar(aId, bId) { return getRelation(aId, bId) < -60; }
   const REL_LABEL = (score) => {
     if (score >= 60) return { label: '동맹', cls: 'rel-ally' };
     if (score >= 20) return { label: '우호', cls: 'rel-friendly' };
@@ -145,13 +149,27 @@
         const bias = affinity + personalityDiploBias(a.leader.personality) + personalityDiploBias(b.leader.personality);
         score += bias * 0.06 * dt + rrand(-0.4, 0.4) * dt;
         if (rng() < 0.00025 * dt * 20) score += rrand(-18, 18); // rare diplomatic incident
-        relations.set(key, clamp(score, -100, 100));
+        score = clamp(score, -100, 100);
+        relations.set(key, score);
+
+        const newCls = REL_LABEL(score).cls;
+        const oldCls = relationCls.get(key);
+        if (newCls !== oldCls) {
+          if (newCls === 'rel-war' && oldCls !== undefined) {
+            pushSpeech(a, '전쟁 선포', 'war_declared', { otherName: b.name });
+            pushSpeech(b, '전쟁 선포', 'war_declared', { otherName: a.name });
+          } else if (newCls === 'rel-ally' && oldCls !== undefined) {
+            pushSpeech(a, '동맹 결성', 'alliance_formed', { otherName: b.name });
+            pushSpeech(b, '동맹 결성', 'alliance_formed', { otherName: a.name });
+          }
+          relationCls.set(key, newCls);
+        }
       }
     }
     const aliveIds = new Set(nations.map((n) => n.id));
     for (const key of relations.keys()) {
       const [a, b] = key.split('_').map(Number);
-      if (!aliveIds.has(a) || !aliveIds.has(b)) relations.delete(key);
+      if (!aliveIds.has(a) || !aliveIds.has(b)) { relations.delete(key); relationCls.delete(key); }
     }
   }
 
@@ -170,6 +188,68 @@
       termStart: simTime,
       termLength: rrand(90, 240), // simulated seconds before succession
     };
+  }
+
+  // ---------- LEADER SPEECHES ---------------------------------------------
+  // A compositional generator stands in for the local-LLM leader speech
+  // feature: each statement is freely assembled at generation time from
+  // personality/philosophy/event phrase pools (never a single fixed
+  // template), so within this framework -- the leader's assigned
+  // personality, philosophy, ideology, and the triggering event -- the
+  // wording is "free" and varies every time, while always staying in
+  // character. Swapping this for a real transformers.js model later only
+  // means replacing this one function's body; every call site below is
+  // unaffected.
+  const SPEECH_OPENERS = {
+    호전적: ['우리의 힘을 두려워하라.', '나약함은 곧 죽음이다.', '적들이 떨고 있음이 느껴진다.'],
+    경건한: ['신께서 우리를 인도하신다.', '이는 하늘의 뜻이다.', '경건한 마음으로 이 순간을 맞이한다.'],
+    실용적: ['감정이 아니라 결과로 말하겠다.', '중요한 것은 실리다.', '우리는 냉정하게 판단해야 한다.'],
+    고립주의적: ['우리 땅을 지키는 것으로 충분하다.', '먼 땅의 일은 우리와 무관하다.', '스스로를 지키는 것이 우선이다.'],
+    팽창주의적: ['우리의 영토는 아직 좁다.', '더 넓은 땅이 우리를 기다린다.', '확장은 숙명이다.'],
+    자비로운: ['백성의 안녕이 나의 소원이다.', '모두가 평화롭기를 바란다.', '자비로 다스리겠다.'],
+    전제적: ['나의 뜻이 곧 법이다.', '의심하지 말고 따르라.', '질서는 위에서 시작된다.'],
+    이상주의적: ['더 나은 세상을 꿈꾼다.', '이상은 반드시 실현된다.', '우리는 역사를 새로 쓸 것이다.'],
+    음모적: ['보이지 않는 곳에서 모든 것이 결정된다.', '진실은 아는 자만이 안다.', '그림자 속에서 미소짓는다.'],
+    검소한: ['사치는 우리의 적이다.', '검소함이 나라를 지킨다.', '작은 것에도 감사할 뿐이다.'],
+  };
+  const SPEECH_PHILOSOPHY_CLOSERS = {
+    자유: '자유가 없다면 아무 의미도 없다.',
+    질서: '질서 없이는 번영도 없다.',
+    전통: '선조들의 길을 잊지 않겠다.',
+    혁신: '변화를 두려워하지 않겠다.',
+    명예: '명예를 목숨보다 소중히 여긴다.',
+    부: '풍요로움이 곧 힘이다.',
+    신앙: '믿음이 우리를 지켜준다.',
+    정복: '정복만이 살길이다.',
+    평등: '모두가 평등한 세상을 만들겠다.',
+    혈통: '핏줄의 이름을 더럽히지 않겠다.',
+  };
+  const SPEECH_EVENT_CORE = {
+    founding: (n) => [`${n.name}의 건국을 선포한다.`, '오늘 이 순간부터 우리는 하나의 나라다.', '이곳에 우리의 터전을 세운다.'],
+    succession: (n) => [`${n.leader.dynasty}의 이름으로 이 자리에 선다.`, '선대의 뜻을 이어받아 나라를 이끌겠다.', '무거운 책임을 받아들인다.'],
+    war_declared: (n, ctx) => [`${ctx.otherName}에 전쟁을 선포한다.`, `${ctx.otherName}은(는) 이제 우리의 적이다.`, `더는 ${ctx.otherName}과(와) 함께할 수 없다.`],
+    alliance_formed: (n, ctx) => [`${ctx.otherName}와(과) 동맹을 맺는다.`, `이제 ${ctx.otherName}은(는) 우리의 벗이다.`, `함께라면 두려울 것이 없다.`],
+    settlement_captured: (n, ctx) => [`${ctx.settlementName}을(를) 우리의 영토로 선포한다.`, `${ctx.settlementName}은(는) 이제 ${n.name}의 땅이다.`, `승리는 우리의 것이다.`],
+  };
+  function generateLeaderSpeech(nation, eventType, ctx) {
+    const L = nation.leader;
+    const opener = pick(SPEECH_OPENERS[L.personality] || ['...']);
+    const coreOptions = SPEECH_EVENT_CORE[eventType] ? SPEECH_EVENT_CORE[eventType](nation, ctx || {}) : ['...'];
+    const core = pick(coreOptions);
+    const closer = SPEECH_PHILOSOPHY_CLOSERS[L.philosophy] || '';
+    return `${opener} ${core} ${closer}`.trim();
+  }
+
+  const speechLog = [];
+  const SPEECH_LOG_MAX = 80;
+  function pushSpeech(nation, eventLabel, eventType, ctx) {
+    const text = generateLeaderSpeech(nation, eventType, ctx);
+    speechLog.unshift({
+      time: simTime, nationId: nation.id, nationName: nation.name, nationColor: nation.color,
+      leaderName: nation.leader.name, ideology: nation.ideology, eventLabel, text,
+    });
+    if (speechLog.length > SPEECH_LOG_MAX) speechLog.length = SPEECH_LOG_MAX;
+    if (diplomacyOpen && activeDiploTab === 'speeches') renderSpeechPanel();
   }
 
   const NATION_HUES = [355, 25, 48, 100, 175, 210, 265, 320, 15, 130, 195, 285];
@@ -319,6 +399,9 @@
     settlements = [];
     nations = [];
     relations = new Map();
+    relationCls = new Map();
+    warAccum = 0;
+    speechLog.length = 0;
     nextId = 1;
     nextNationHue = 0;
     history.length = 0;
@@ -399,6 +482,7 @@
       raceTotals: new Array(RACES.length).fill(0),
     };
     nations.push(nation);
+    pushSpeech(nation, '건국 선언', 'founding');
     return nation;
   }
   function nearestNation(x, y) {
@@ -478,6 +562,8 @@
 
       const population = Math.max(6, absorbed);
       const raceSum = raceCounts.reduce((a, b) => a + b, 0) || 1;
+      let domRaceIdx = 0;
+      for (let ri = 1; ri < raceCounts.length; ri++) if (raceCounts[ri] > raceCounts[domRaceIdx]) domRaceIdx = ri;
       const settlement = {
         id: nextId++, x: p.x, y: p.y,
         name: genPersonName() + pick(['성', '촌', '항', '진']),
@@ -487,6 +573,7 @@
         isCity: false, isCapital,
         ideology: nation.ideology,
         leaderName: isCapital ? nation.leader.name : genPersonName(),
+        leaderRace: domRaceIdx,
         founded: simTime,
       };
       settlements.push(settlement);
@@ -611,9 +698,73 @@
           nation.ideology = pick(IDEOLOGIES);
         }
         nation.leader = genLeader(dynasty);
+        pushSpeech(nation, revolution ? '왕조 교체' : '지도자 승계', 'succession');
       }
     }
     nations = nations.filter((n) => n.settlementIds.length > 0);
+  }
+
+  // ---------- WAR & PLUNDER -------------------------------------------
+  const RAID_RANGE = 22;
+  const RAID_CHANCE = 0.25; // expected raids per nearby settlement pair per simulated second, while at war
+  function performRaid(sa, na, sb, nb) {
+    const totalPop = sa.population + sb.population || 1;
+    const aIsAttacker = rng() < sa.population / totalPop; // the larger side has the military edge
+    const attacker = aIsAttacker ? sa : sb, attackerNation = aIsAttacker ? na : nb;
+    const defender = aIsAttacker ? sb : sa, defenderNation = aIsAttacker ? nb : na;
+
+    const plunderFrac = rrand(0.12, 0.28);
+    const plundered = defender.population * plunderFrac;
+    defender.population = Math.max(1, defender.population - plundered);
+    if (defender.raceComposition) {
+      for (let ri = 0; ri < defender.raceComposition.length; ri++) defender.raceComposition[ri] *= (1 - plunderFrac);
+    }
+    const spoils = plundered * 0.35; // attrition -- raiders bring home less than what was taken
+    attacker.population += spoils;
+    if (attacker.raceComposition) {
+      const total = attacker.raceComposition.reduce((a, b) => a + b, 0) || 1;
+      for (let ri = 0; ri < attacker.raceComposition.length; ri++) {
+        attacker.raceComposition[ri] += (attacker.raceComposition[ri] / total) * spoils;
+      }
+    }
+    // the raid also loots and burns local resources around the defender
+    const cx = Math.floor(defender.x), cy = Math.floor(defender.y);
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        const x = cx + dx, y = cy + dy;
+        if (!inBounds(x, y)) continue;
+        const i = idx(x, y);
+        resource[i] = clamp(resource[i] * 0.5, 0, 1);
+      }
+    }
+
+    // a decisive raid can outright capture a non-capital settlement --
+    // territory actually changes hands, not just population/resources
+    const decisive = attacker.population > defender.population * 1.4;
+    if (decisive && !defender.isCapital && rng() < 0.18) {
+      defenderNation.settlementIds = defenderNation.settlementIds.filter((id) => id !== defender.id);
+      attackerNation.settlementIds.push(defender.id);
+      defender.nationId = attackerNation.id;
+      defender.ideology = attackerNation.ideology; // reorganized under the conqueror
+      recomputeTerritory();
+      pushSpeech(attackerNation, '영토 점령', 'settlement_captured', { settlementName: defender.name });
+    }
+  }
+  function tickWarPlunder() {
+    for (let i = 0; i < nations.length; i++) {
+      for (let j = i + 1; j < nations.length; j++) {
+        const a = nations[i], b = nations[j];
+        if (!isAtWar(a.id, b.id)) continue;
+        const aSettlements = settlements.filter((s) => s.nationId === a.id);
+        const bSettlements = settlements.filter((s) => s.nationId === b.id);
+        for (const sa of aSettlements) {
+          for (const sb of bSettlements) {
+            if (Math.hypot(sa.x - sb.x, sa.y - sb.y) > RAID_RANGE) continue;
+            if (rng() < RAID_CHANCE * WAR_CHECK_INTERVAL) performRaid(sa, a, sb, b);
+          }
+        }
+      }
+    }
   }
 
   // ---------- PEOPLE (free-roaming) ---------------------------------------
@@ -700,6 +851,12 @@
       recomputeTerritory();
     }
 
+    warAccum += TICK_DT;
+    if (warAccum >= WAR_CHECK_INTERVAL) {
+      warAccum = 0;
+      tickWarPlunder();
+    }
+
     sampleAccum += TICK_DT;
     if (sampleAccum >= SAMPLE_INTERVAL) {
       sampleAccum = 0;
@@ -715,7 +872,7 @@
     if (history.length > HISTORY_MAX) history.shift();
     updateCounts(totalPop, settlements.length, nations.length);
     updateNationList();
-    if (diplomacyOpen) renderDiplomacyPanel();
+    if (diplomacyOpen && activeDiploTab === 'diplomacy') renderDiplomacyPanel();
   }
 
   // ---------- RENDERING -----------------------------------------------
@@ -866,6 +1023,20 @@
     ctx.restore();
   }
 
+  // Draws one walk-cycle frame of a race's sprite, feet-anchored at (px,py).
+  // Returns true if it actually drew an image (false = still loading).
+  function drawPersonSprite(ctx, px, py, race, frameIdx, heightPx, flip) {
+    const img = race.images[frameIdx];
+    if (!img || !img.complete || !img.naturalWidth) return false;
+    const w = heightPx * (img.naturalWidth / img.naturalHeight);
+    ctx.save();
+    ctx.translate(px, py);
+    if (flip) ctx.scale(-1, 1); // sprites face left by default
+    ctx.drawImage(img, -w / 2, -heightPx, w, heightPx);
+    ctx.restore();
+    return true;
+  }
+
   function renderEntities() {
     const w = entityCanvas.width, h = entityCanvas.height;
     ectx.clearRect(0, 0, w, h);
@@ -873,21 +1044,14 @@
     const cellPx = Math.min(sx, sy);
 
     const WALK_FPS = 3.2; // walk-cycle frame swaps per second
-    const spriteH = clamp(cellPx * 4.5, 8, 34);
+    const spriteH = clamp(cellPx * 1.5, 3, 11); // ordinary wandering people
     ectx.fillStyle = '#f1e9d8';
     for (const p of people) {
       const race = RACES[p.race] || RACES[0];
       const frameIdx = Math.floor((simTime + p.id * 0.53) * WALK_FPS) % 2;
-      const img = race.images[frameIdx];
       const px = p.x * sx, py = p.y * sy;
-      if (img && img.complete && img.naturalWidth) {
-        const w = spriteH * (img.naturalWidth / img.naturalHeight);
-        ectx.save();
-        ectx.translate(px, py);
-        if (p.vx > 0.02) ectx.scale(-1, 1); // sprites face left by default
-        ectx.drawImage(img, -w / 2, -spriteH, w, spriteH);
-        ectx.restore();
-      } else {
+      const drawn = drawPersonSprite(ectx, px, py, race, frameIdx, spriteH, p.vx > 0.02);
+      if (!drawn) {
         // fallback dot while the sprite images are still loading
         ectx.beginPath();
         ectx.arc(px, py, Math.max(1, cellPx * 0.5), 0, Math.PI * 2);
@@ -895,10 +1059,14 @@
       }
     }
 
+    // Leaders (national and regional heads) are people too, not just the
+    // settlement marker: each settlement renders its leader standing on the
+    // marker, larger than an ordinary wanderer, wearing their title's hat.
+    const LEADER_IDLE_FPS = 1.1;
     for (const s of settlements) {
       const nation = nations.find((n) => n.id === s.nationId);
       const cx = s.x * sx, cy = s.y * sy;
-      const r = Math.max(2.5, cellPx * (s.isCity ? 2.2 : 1.4));
+      const r = Math.max(2, cellPx * (s.isCity ? 1.7 : 1.1));
       ectx.fillStyle = nation ? nation.color : '#999';
       ectx.beginPath();
       ectx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -906,7 +1074,13 @@
       ectx.strokeStyle = 'rgba(0,0,0,0.45)';
       ectx.lineWidth = 1;
       ectx.stroke();
-      if (nation) drawLeaderHat(ectx, cx, cy - r - 1, s.isCapital ? nation.ideology : (s.ideology || nation.ideology), s.isCapital);
+
+      const leaderRace = RACES[s.leaderRace] || RACES[0];
+      const leaderH = Math.max(6, spriteH * 2.3);
+      const frameIdx = Math.floor((simTime + s.id * 0.71) * LEADER_IDLE_FPS) % 2;
+      const drawn = drawPersonSprite(ectx, cx, cy, leaderRace, frameIdx, leaderH, false);
+      const hatTopY = cy - (drawn ? leaderH : r) - 1;
+      if (nation) drawLeaderHat(ectx, cx, hatTopY, s.isCapital ? nation.ideology : (s.ideology || nation.ideology), s.isCapital);
     }
   }
 
@@ -975,6 +1149,26 @@
 
   // ---------- DIPLOMACY / REGIONAL IDEOLOGY WINDOW -------------------------
   let diplomacyOpen = false;
+  let activeDiploTab = 'diplomacy';
+  function renderSpeechPanel() {
+    const body = document.getElementById('civSpeechBody');
+    if (!speechLog.length) {
+      body.innerHTML = '<div class="civDiploEmpty">아직 기록된 발언이 없습니다.</div>';
+      return;
+    }
+    body.innerHTML = speechLog.map((e) => {
+      return `<div class="civSpeechEntry"><div class="civSpeechHead"><span class="civSwatch" style="background:${e.nationColor}"></span>` +
+        `<b>${e.nationName}</b> <span class="civMeta">${e.leaderName} · ${e.ideology} · ${e.eventLabel}</span></div>` +
+        `<div class="civSpeechText">"${e.text}"</div></div>`;
+    }).join('');
+  }
+  function setDiploTab(tab) {
+    activeDiploTab = tab;
+    document.querySelectorAll('.civModalTabBtn').forEach((b) => b.classList.toggle('active', b.dataset.diplotab === tab));
+    document.getElementById('civDiplomacyBody').classList.toggle('hidden', tab !== 'diplomacy');
+    document.getElementById('civSpeechBody').classList.toggle('hidden', tab !== 'speeches');
+    if (tab === 'diplomacy') renderDiplomacyPanel(); else renderSpeechPanel();
+  }
   function renderDiplomacyPanel() {
     const body = document.getElementById('civDiplomacyBody');
     if (!nations.length) {
@@ -1015,7 +1209,7 @@
   function openDiplomacyPanel() {
     diplomacyOpen = true;
     document.getElementById('civDiplomacyOverlay').classList.remove('hidden');
-    renderDiplomacyPanel();
+    setDiploTab(activeDiploTab);
   }
   function closeDiplomacyPanel() {
     diplomacyOpen = false;
@@ -1062,6 +1256,7 @@
         isCity: false, isCapital,
         ideology: nation.ideology,
         leaderName: isCapital ? nation.leader.name : genPersonName(),
+        leaderRace: randomRace(),
         founded: simTime,
       };
       settlements.push(settlement);
@@ -1119,7 +1314,9 @@
   function bindUI() {
     document.querySelectorAll('.civToolBtn').forEach((btn) => {
       btn.addEventListener('click', () => {
+        const wasActive = btn.classList.contains('active');
         document.querySelectorAll('.civToolBtn').forEach((b) => b.classList.remove('active'));
+        if (wasActive) { currentTool = null; return; } // click the active tool again to deselect it
         btn.classList.add('active');
         currentTool = btn.dataset.civtool;
       });
@@ -1150,6 +1347,9 @@
     document.getElementById('civDiplomacyCloseBtn').addEventListener('click', closeDiplomacyPanel);
     document.getElementById('civDiplomacyOverlay').addEventListener('click', (ev) => {
       if (ev.target.id === 'civDiplomacyOverlay') closeDiplomacyPanel();
+    });
+    document.querySelectorAll('.civModalTabBtn').forEach((btn) => {
+      btn.addEventListener('click', () => setDiploTab(btn.dataset.diplotab));
     });
 
     const resourceSlider = document.getElementById('civResourceRateSlider');

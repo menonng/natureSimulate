@@ -175,10 +175,15 @@
   <div id="civDiplomacyOverlay" class="civModalOverlay hidden">
     <div class="civModalCard">
       <div class="civModalHeader">
-        <h2>🕊️ 외교 관계 &amp; 지역 사상</h2>
+        <h2>🏛️ 국가 정보</h2>
         <button id="civDiplomacyCloseBtn" title="닫기">✕</button>
       </div>
+      <div class="civModalTabs">
+        <button class="civModalTabBtn active" data-diplotab="diplomacy">🕊️ 외교·사상</button>
+        <button class="civModalTabBtn" data-diplotab="speeches">📜 지도자 발언</button>
+      </div>
       <div id="civDiplomacyBody" class="civModalBody"></div>
+      <div id="civSpeechBody" class="civModalBody hidden"></div>
     </div>
   </div>
 </div>

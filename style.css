@@ -526,6 +526,27 @@ input[type=range]::-moz-range-thumb{
   flex:none;
 }
 .civModalHeader h2{margin:0; font-size:.92rem; color:var(--gold);}
+.civModalTabs{
+  display:flex;
+  gap:4px;
+  padding:8px 16px 0;
+  background:var(--panel-bg2);
+  border-bottom:1px solid #3a3128;
+  flex:none;
+}
+.civModalTabBtn{
+  background:none;
+  border:1px solid transparent;
+  border-bottom:none;
+  color:var(--ink-dim);
+  padding:6px 12px;
+  font-size:.7rem;
+  border-radius:8px 8px 0 0;
+  cursor:pointer;
+  font-family:inherit;
+}
+.civModalTabBtn.active{background:var(--panel-bg); border-color:#3a3128; color:var(--gold);}
+.civModalTabBtn:not(.active):hover{color:var(--ink);}
 #civDiplomacyCloseBtn{
   background:none;
   border:1px solid var(--gold-dim);
@@ -590,3 +611,20 @@ input[type=range]::-moz-range-thumb{
   color:var(--ink-dim);
 }
 .civDiploRegionRow .civDiploDiverged{color:var(--pink);}
+
+.civSpeechEntry{
+  border:1px solid #2a231b;
+  border-radius:10px;
+  padding:8px 10px;
+  background:var(--panel-bg2);
+}
+.civSpeechHead{
+  display:flex;
+  align-items:baseline;
+  gap:6px;
+  margin-bottom:4px;
+}
+.civSpeechHead .civSwatch{width:8px; height:8px; border-radius:50%; flex:none; margin-top:.2em;}
+.civSpeechHead b{color:var(--ink);}
+.civSpeechHead .civMeta{color:var(--ink-dim); font-size:.62rem;}
+.civSpeechText{color:var(--ink); font-style:italic; line-height:1.4;}

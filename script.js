@@ -923,7 +923,9 @@ function bindPointer() {
 function bindUI() {
   document.querySelectorAll('.toolBtn:not(.trailBtn)').forEach((btn) => {
     btn.addEventListener('click', () => {
+      const wasActive = btn.classList.contains('active');
       document.querySelectorAll('.toolBtn:not(.trailBtn)').forEach((b) => b.classList.remove('active'));
+      if (wasActive) { currentTool = null; return; } // click the active tool again to deselect it
       btn.classList.add('active');
       currentTool = btn.dataset.tool;
     });

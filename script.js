@@ -63,9 +63,12 @@ const TRAIL_MAX_POINTS = 16;
 const TRAIL_RECORD_EVERY = 3; // ticks
 
 const history = []; // {r,f,h,g}
-const HISTORY_MAX = 160;
+// Sample every simulation tick (the smallest time unit the sim has) so the
+// graph reflects what actually happened at full resolution regardless of
+// the speed multiplier, instead of aliasing/smoothing over a coarser window.
+const HISTORY_MAX = 2400; // 2400 * TICK_DT = 120s of simulated time
 let sampleAccum = 0;
-const SAMPLE_INTERVAL = 0.75; // seconds
+const SAMPLE_INTERVAL = TICK_DT;
 
 // ---------- HELPERS -------------------------------------------------------
 function idx(x, y) { return y * COLS + x; }

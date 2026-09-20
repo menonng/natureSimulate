@@ -51,7 +51,35 @@ async function initWaterTank() {
   // ---------- height-field wave simulation -------------------------------
   let curr = new Float32Array(GRID * GRID);
   let prev = new Float32Array(GRID * GRID);
+  // Tracks how much force has recently landed at each cell (for heat-map
+  // mode) separately from the signed wave height, which oscillates through
+  // zero and so can't tell you "how hard was this spot hit."
+  let heat = new Float32Array(GRID * GRID);
+  const HEAT_DECAY = 0.994;
   function hIndex(x, z) { return x + z * GRID; }
+
+  // Heat-map gradient built from the site's palette: blue -> sky -> green
+  // -> yellow -> orange -> red, low force to high force.
+  const HEAT_STOPS = [
+    [0.00, 0x33, 0x55, 0xbb],
+    [0.20, 0x39, 0xc5, 0xbb],
+    [0.45, 0x55, 0xbb, 0x44],
+    [0.65, 0xff, 0xcc, 0x11],
+    [0.85, 0xff, 0x7e, 0x00],
+    [1.00, 0xff, 0x00, 0x45],
+  ];
+  function heatColorAt(v, out) {
+    const t = Math.max(0, Math.min(1, v / 3.2));
+    let a = HEAT_STOPS[0], b = HEAT_STOPS[HEAT_STOPS.length - 1];
+    for (let k = 0; k < HEAT_STOPS.length - 1; k++) {
+      if (t >= HEAT_STOPS[k][0] && t <= HEAT_STOPS[k + 1][0]) { a = HEAT_STOPS[k]; b = HEAT_STOPS[k + 1]; break; }
+    }
+    const span = b[0] - a[0] || 1;
+    const lt = (t - a[0]) / span;
+    out.r = ((a[1] + (b[1] - a[1]) * lt) / 255);
+    out.g = ((a[2] + (b[2] - a[2]) * lt) / 255);
+    out.b = ((a[3] + (b[3] - a[3]) * lt) / 255);
+  }
 
   function stepWaves() {
     const next = prev; // reuse the older buffer as scratch for the new frame
@@ -67,6 +95,7 @@ async function initWaterTank() {
     }
     prev = curr;
     curr = next;
+    for (let i = 0; i < heat.length; i++) heat[i] *= HEAT_DECAY;
   }
 
   function splashAt(gx, gz, strength) {
@@ -79,6 +108,7 @@ async function initWaterTank() {
         if (d > R) continue;
         const falloff = 1 - d / R;
         curr[hIndex(x, z)] -= strength * falloff;
+        heat[hIndex(x, z)] += strength * falloff;
       }
     }
   }
@@ -172,6 +202,31 @@ async function initWaterTank() {
   waterMesh.position.y = WATER_REST_Y;
   scene.add(waterMesh);
 
+  // vertex colors, used only in heat-map mode (see toggleHeatMode below)
+  waterGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(GRID * GRID * 3), 3));
+  let heatMode = false;
+  const heatBtn = document.getElementById('waterHeatBtn');
+  function setHeatMode(on) {
+    heatMode = on;
+    waterMat.vertexColors = on;
+    waterMat.color.set(on ? 0xffffff : 0x2a6fb0);
+    waterMat.needsUpdate = true;
+    heatBtn.classList.toggle('active', on);
+  }
+  heatBtn.addEventListener('click', () => setHeatMode(!heatMode));
+
+  const heatRgb = { r: 0, g: 0, b: 0 };
+  function applyHeatColors() {
+    const col = waterGeo.attributes.color;
+    for (let z = 0; z < GRID; z++) {
+      for (let x = 0; x < GRID; x++) {
+        heatColorAt(heat[hIndex(x, z)], heatRgb);
+        col.setXYZ(hIndex(x, z), heatRgb.r, heatRgb.g, heatRgb.b);
+      }
+    }
+    col.needsUpdate = true;
+  }
+
   // The animated plane above is just the ripple surface - fill the volume
   // underneath it down to the floor so the tank reads as actually full of
   // water (visible sides/bottom) instead of a thin floating sheet.
@@ -256,7 +311,7 @@ async function initWaterTank() {
   window.addEventListener('pointercancel', release);
 
   document.getElementById('waterClearBtn').addEventListener('click', () => {
-    curr.fill(0); prev.fill(0);
+    curr.fill(0); prev.fill(0); heat.fill(0);
     pressing = false;
   });
 
@@ -276,6 +331,7 @@ async function initWaterTank() {
     if (!running) return;
     stepWaves();
     applyHeightsToMesh();
+    if (heatMode) applyHeatColors();
     controls.update();
     renderer.render(scene, camera);
     requestAnimationFrame(loop);

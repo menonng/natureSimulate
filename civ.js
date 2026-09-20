@@ -707,6 +707,88 @@
     tctx.putImageData(terrainImage, 0, 0);
   }
 
+  // ---------- LEADER HATS -------------------------------------------------
+  // Every settlement has a leader (the capital's is the nation's head of
+  // state; every other settlement has a regional head) whose title comes
+  // from the nation's ideology (LEADER_TITLE / REGIONAL_TITLE). Each
+  // ideology gets its own hat silhouette, and within an ideology the
+  // national leader's hat is drawn larger and in gold while a regional
+  // leader's is smaller and in silver -- so every one of the ten titles
+  // reads as visually distinct headwear.
+  function drawCrown(ctx, cx, cy, w, h, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(cx - w / 2, cy + h / 2);
+    ctx.lineTo(cx - w / 2, cy - h * 0.05);
+    ctx.lineTo(cx - w / 3, cy - h / 2);
+    ctx.lineTo(cx - w / 6, cy - h * 0.1);
+    ctx.lineTo(cx, cy - h * 0.55);
+    ctx.lineTo(cx + w / 6, cy - h * 0.1);
+    ctx.lineTo(cx + w / 3, cy - h / 2);
+    ctx.lineTo(cx + w / 2, cy - h * 0.05);
+    ctx.lineTo(cx + w / 2, cy + h / 2);
+    ctx.closePath();
+    ctx.fill();
+  }
+  function drawMitre(ctx, cx, cy, w, h, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(cx - w / 2, cy + h / 2);
+    ctx.lineTo(cx - w / 2, cy - h * 0.05);
+    ctx.quadraticCurveTo(cx - w / 4, cy - h * 0.55, cx, cy - h * 0.6);
+    ctx.quadraticCurveTo(cx + w / 4, cy - h * 0.55, cx + w / 2, cy - h * 0.05);
+    ctx.lineTo(cx + w / 2, cy + h / 2);
+    ctx.closePath();
+    ctx.fill();
+  }
+  function drawTopHat(ctx, cx, cy, w, h, color) {
+    ctx.fillStyle = color;
+    ctx.fillRect(cx - w / 2, cy + h * 0.28, w, h * 0.16);
+    ctx.fillRect(cx - w * 0.32, cy - h / 2, w * 0.64, h * 0.8);
+  }
+  function drawPeakedCap(ctx, cx, cy, w, h, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy - h * 0.08, w * 0.42, h * 0.42, 0, Math.PI, 0, true);
+    ctx.fill();
+    ctx.fillRect(cx - w / 2, cy - h * 0.1, w, h * 0.14);
+    ctx.beginPath();
+    ctx.ellipse(cx + w * 0.16, cy + h * 0.1, w * 0.4, h * 0.14, 0, 0, Math.PI);
+    ctx.fill();
+  }
+  function drawHeaddress(ctx, cx, cy, w, h, color) {
+    ctx.fillStyle = color;
+    ctx.fillRect(cx - w / 2, cy + h * 0.22, w, h * 0.16);
+    const n = 5;
+    for (let i = 0; i < n; i++) {
+      const t = i / (n - 1);
+      const fx = cx - w / 2 + t * w;
+      const fh = h * (0.55 + 0.35 * Math.sin(t * Math.PI));
+      ctx.beginPath();
+      ctx.moveTo(fx - w * 0.06, cy + h * 0.22);
+      ctx.lineTo(fx, cy + h * 0.22 - fh);
+      ctx.lineTo(fx + w * 0.06, cy + h * 0.22);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+  const HAT_BY_IDEOLOGY = {
+    군주제: drawCrown, 신정: drawMitre, 공화정: drawTopHat,
+    전체주의: drawPeakedCap, 부족연합: drawHeaddress,
+  };
+  function drawLeaderHat(ctx, cx, topY, ideology, isNational) {
+    const draw = HAT_BY_IDEOLOGY[ideology];
+    if (!draw) return;
+    const scale = isNational ? 1 : 0.62;
+    const w = 11 * scale, h = 9.5 * scale;
+    const color = isNational ? '#FFCC11' : '#E8E4D8';
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth = 0.6;
+    draw(ctx, cx, topY - h / 2, w, h, color);
+    ctx.restore();
+  }
+
   function renderEntities() {
     const w = entityCanvas.width, h = entityCanvas.height;
     ectx.clearRect(0, 0, w, h);
@@ -747,12 +829,7 @@
       ectx.strokeStyle = 'rgba(0,0,0,0.45)';
       ectx.lineWidth = 1;
       ectx.stroke();
-      if (s.isCapital) {
-        ectx.fillStyle = '#FFCC11';
-        ectx.beginPath();
-        ectx.arc(cx, cy - r - 3, 1.6, 0, Math.PI * 2);
-        ectx.fill();
-      }
+      if (nation) drawLeaderHat(ectx, cx, cy - r - 1, nation.ideology, s.isCapital);
     }
   }
 

@@ -104,6 +104,57 @@
   const REGIONAL_TITLE = { 군주제: '영주', 신정: '사제', 공화정: '시장', 전체주의: '지구서기', 부족연합: '촌장' };
   const CIV_TIER_NAME = ['', '석기시대', '청동기시대', '고대', '중세', '근대'];
 
+  // How compatible two ideologies are, used both to bias inter-nation
+  // diplomacy drift and to weight which ideology a drifting region is
+  // likely to adopt (regions drift toward ideologies they're already
+  // philosophically close to, not to a uniformly random one).
+  const IDEOLOGY_AFFINITY = {
+    군주제: { 군주제: 6, 신정: 4, 공화정: -4, 전체주의: -2, 부족연합: 1 },
+    신정: { 군주제: 4, 신정: 6, 공화정: -2, 전체주의: -3, 부족연합: 2 },
+    공화정: { 군주제: -4, 신정: -2, 공화정: 6, 전체주의: -6, 부족연합: 0 },
+    전체주의: { 군주제: -2, 신정: -3, 공화정: -6, 전체주의: 3, 부족연합: -3 },
+    부족연합: { 군주제: 1, 신정: 2, 공화정: 0, 전체주의: -3, 부족연합: 5 },
+  };
+  function personalityDiploBias(personality) {
+    if (personality === '호전적' || personality === '팽창주의적' || personality === '전제적') return -1;
+    if (personality === '자비로운' || personality === '실용적' || personality === '이상주의적') return 1;
+    return 0;
+  }
+
+  // ---------- DIPLOMACY -------------------------------------------------
+  // A continuous -100..100 score per nation pair, drifting slowly from
+  // ideology affinity and leader personality plus a little noise, with
+  // rare sharper "incidents". Thresholded into a label for display.
+  let relations = new Map();
+  function relationKey(a, b) { return a < b ? `${a}_${b}` : `${b}_${a}`; }
+  function getRelation(aId, bId) { return relations.get(relationKey(aId, bId)) ?? 0; }
+  const REL_LABEL = (score) => {
+    if (score >= 60) return { label: '동맹', cls: 'rel-ally' };
+    if (score >= 20) return { label: '우호', cls: 'rel-friendly' };
+    if (score >= -20) return { label: '중립', cls: 'rel-neutral' };
+    if (score >= -60) return { label: '긴장', cls: 'rel-tense' };
+    return { label: '전쟁', cls: 'rel-war' };
+  };
+  function tickDiplomacy(dt) {
+    for (let i = 0; i < nations.length; i++) {
+      for (let j = i + 1; j < nations.length; j++) {
+        const a = nations[i], b = nations[j];
+        const key = relationKey(a.id, b.id);
+        let score = relations.has(key) ? relations.get(key) : rrand(-8, 8);
+        const affinity = (IDEOLOGY_AFFINITY[a.ideology] && IDEOLOGY_AFFINITY[a.ideology][b.ideology]) || 0;
+        const bias = affinity + personalityDiploBias(a.leader.personality) + personalityDiploBias(b.leader.personality);
+        score += bias * 0.06 * dt + rrand(-0.4, 0.4) * dt;
+        if (rng() < 0.00025 * dt * 20) score += rrand(-18, 18); // rare diplomatic incident
+        relations.set(key, clamp(score, -100, 100));
+      }
+    }
+    const aliveIds = new Set(nations.map((n) => n.id));
+    for (const key of relations.keys()) {
+      const [a, b] = key.split('_').map(Number);
+      if (!aliveIds.has(a) || !aliveIds.has(b)) relations.delete(key);
+    }
+  }
+
   // Leader flavor, kept separate from the nation's formal government system
   // (ideology): a personal temperament and a personal philosophical leaning,
   // randomly assigned to each leader. Used as flavor now, and as prompt
@@ -267,6 +318,7 @@
     people = [];
     settlements = [];
     nations = [];
+    relations = new Map();
     nextId = 1;
     nextNationHue = 0;
     history.length = 0;
@@ -433,7 +485,7 @@
         population,
         raceComposition: raceCounts.map((c) => (c / raceSum) * population),
         isCity: false, isCapital,
-        leaderTitle: isCapital ? LEADER_TITLE[nation.ideology] : REGIONAL_TITLE[nation.ideology],
+        ideology: nation.ideology,
         leaderName: isCapital ? nation.leader.name : genPersonName(),
         founded: simTime,
       };
@@ -444,8 +496,31 @@
     return false;
   }
 
+  // Regional ideological drift: a settlement can slowly diverge from its
+  // nation's official ideology. Weaker national cohesion (lower faith)
+  // makes drift more likely, and the region is more likely to drift toward
+  // an ideology it's already philosophically close to.
+  function driftSettlementIdeology(s, nation, dt) {
+    if (!nation || !s.ideology) return;
+    const driftChance = 0.000015 * dt * 20 * (1.4 - nation.faith);
+    if (rng() >= driftChance) return;
+    const affinities = IDEOLOGY_AFFINITY[s.ideology] || {};
+    const candidates = IDEOLOGIES.filter((id) => id !== s.ideology);
+    const weights = candidates.map((id) => Math.max(0.2, 5 + (affinities[id] || 0)));
+    const total = weights.reduce((a, b) => a + b, 0);
+    let r = rng() * total;
+    let chosen = candidates[candidates.length - 1];
+    for (let i = 0; i < candidates.length; i++) {
+      r -= weights[i];
+      if (r <= 0) { chosen = candidates[i]; break; }
+    }
+    s.ideology = chosen;
+  }
+
   function tickSettlements(dt) {
     for (const s of settlements) {
+      const nation = nations.find((n) => n.id === s.nationId);
+      if (!s.isCapital) driftSettlementIdeology(s, nation, dt);
       const cx = Math.floor(s.x), cy = Math.floor(s.y);
       let avgRes = 0, n = 0;
       for (let dy = -2; dy <= 2; dy++) {
@@ -616,6 +691,7 @@
     tickPeople(TICK_DT);
     tickSettlements(TICK_DT);
     tickNations(TICK_DT);
+    tickDiplomacy(TICK_DT);
     simTime += TICK_DT;
 
     territoryAccum += TICK_DT;
@@ -639,6 +715,7 @@
     if (history.length > HISTORY_MAX) history.shift();
     updateCounts(totalPop, settlements.length, nations.length);
     updateNationList();
+    if (diplomacyOpen) renderDiplomacyPanel();
   }
 
   // ---------- RENDERING -----------------------------------------------
@@ -829,7 +906,7 @@
       ectx.strokeStyle = 'rgba(0,0,0,0.45)';
       ectx.lineWidth = 1;
       ectx.stroke();
-      if (nation) drawLeaderHat(ectx, cx, cy - r - 1, nation.ideology, s.isCapital);
+      if (nation) drawLeaderHat(ectx, cx, cy - r - 1, s.isCapital ? nation.ideology : (s.ideology || nation.ideology), s.isCapital);
     }
   }
 
@@ -896,6 +973,55 @@
     }).join('');
   }
 
+  // ---------- DIPLOMACY / REGIONAL IDEOLOGY WINDOW -------------------------
+  let diplomacyOpen = false;
+  function renderDiplomacyPanel() {
+    const body = document.getElementById('civDiplomacyBody');
+    if (!nations.length) {
+      body.innerHTML = '<div class="civDiploEmpty">아직 형성된 국가가 없습니다.</div>';
+      return;
+    }
+    const sorted = [...nations].sort((a, b) => b.totalPopulation - a.totalPopulation);
+    body.innerHTML = sorted.map((n) => {
+      const tier = CIV_TIER_NAME[n.civLevel] || '';
+      const others = nations.filter((o) => o.id !== n.id);
+      const relRow = others.length
+        ? others.map((o) => {
+            const score = getRelation(n.id, o.id);
+            const rel = REL_LABEL(score);
+            return `<span class="civRelChip ${rel.cls}" title="${Math.round(score)}">${o.name} · ${rel.label}</span>`;
+          }).join('')
+        : '<span class="civDiploEmpty">교류 중인 다른 국가가 없습니다.</span>';
+
+      const nationSettlements = settlements.filter((s) => s.nationId === n.id);
+      const regionRows = nationSettlements.length
+        ? nationSettlements.map((s) => {
+            const ideologyText = s.isCapital ? n.ideology : (s.ideology || n.ideology);
+            const title = s.isCapital ? LEADER_TITLE[n.ideology] : REGIONAL_TITLE[ideologyText];
+            const diverged = !s.isCapital && ideologyText !== n.ideology;
+            return `<div class="civDiploRegionRow"><span>${s.isCapital ? '👑 ' : ''}${s.name}${s.isCapital ? ' (수도)' : ''} · ${title} ${s.leaderName}</span>` +
+              `<span class="${diverged ? 'civDiploDiverged' : ''}">${ideologyText}${diverged ? ' ⚠️' : ''}</span></div>`;
+          }).join('')
+        : '<div class="civDiploEmpty">정착지가 없습니다.</div>';
+
+      return `<div class="civDiploNation">` +
+        `<div class="civDiploNationHead"><span class="civSwatch" style="background:${n.color}"></span>` +
+        `<b>${n.name}</b> (${n.dynasty}) <span class="civMeta">· 공식 사상 ${n.ideology} · Lv.${n.civLevel} ${tier} · 인구 ${Math.round(n.totalPopulation)}</span></div>` +
+        `<div class="civDiploSection"><div class="civDiploSectionTitle">외교 관계</div><div class="civRelRow">${relRow}</div></div>` +
+        `<div class="civDiploSection"><div class="civDiploSectionTitle">지역별 사상</div>${regionRows}</div>` +
+        `</div>`;
+    }).join('');
+  }
+  function openDiplomacyPanel() {
+    diplomacyOpen = true;
+    document.getElementById('civDiplomacyOverlay').classList.remove('hidden');
+    renderDiplomacyPanel();
+  }
+  function closeDiplomacyPanel() {
+    diplomacyOpen = false;
+    document.getElementById('civDiplomacyOverlay').classList.add('hidden');
+  }
+
   // ---------- VIEWPORT SIZING ----------------------------------------------
   function resizeEntityCanvas() {
     const rect = canvasWrap.getBoundingClientRect();
@@ -934,7 +1060,7 @@
         nationId: nation.id, population: 10,
         raceComposition: [5, 5],
         isCity: false, isCapital,
-        leaderTitle: isCapital ? LEADER_TITLE[nation.ideology] : REGIONAL_TITLE[nation.ideology],
+        ideology: nation.ideology,
         leaderName: isCapital ? nation.leader.name : genPersonName(),
         founded: simTime,
       };
@@ -1011,9 +1137,19 @@
       const seed = seedInput.value.trim() || randomSeedString();
       seedInput.value = seed;
       generateWorld(seed);
+      closeDiplomacyPanel();
     });
     document.getElementById('civResetBtn').addEventListener('click', () => {
       generateWorld(currentSeed || randomSeedString());
+      closeDiplomacyPanel();
+    });
+
+    document.getElementById('civDiplomacyBtn').addEventListener('click', () => {
+      if (diplomacyOpen) closeDiplomacyPanel(); else openDiplomacyPanel();
+    });
+    document.getElementById('civDiplomacyCloseBtn').addEventListener('click', closeDiplomacyPanel);
+    document.getElementById('civDiplomacyOverlay').addEventListener('click', (ev) => {
+      if (ev.target.id === 'civDiplomacyOverlay') closeDiplomacyPanel();
     });
 
     const resourceSlider = document.getElementById('civResourceRateSlider');

@@ -126,6 +126,9 @@
       <button id="civNewSeedBtn" title="새 시드로 지도 생성">🎲 새 지도</button>
       <button id="civResetBtn" title="같은 시드로 초기화">↺ 초기화</button>
     </div>
+    <div class="toolgroup">
+      <button id="civDiplomacyBtn" title="외교 관계 및 지역 사상 보기">🕊️ 외교</button>
+    </div>
   </div>
 
   <div id="civFrame">
@@ -168,6 +171,16 @@
   </div>
 
   <p class="simHint">지형 위를 클릭·드래그해서 도구를 사용하세요. 사람들이 모이면 정착지가, 정착지가 늘어나면 국가가 형성됩니다. 국가 영토는 지도 위에 칸 단위 사각형 색상으로 표시됩니다. 사람들은 묘인족·인간족 두 종족으로 나뉘며 걸어 다니는 모습으로 표시됩니다.</p>
+
+  <div id="civDiplomacyOverlay" class="civModalOverlay hidden">
+    <div class="civModalCard">
+      <div class="civModalHeader">
+        <h2>🕊️ 외교 관계 &amp; 지역 사상</h2>
+        <button id="civDiplomacyCloseBtn" title="닫기">✕</button>
+      </div>
+      <div id="civDiplomacyBody" class="civModalBody"></div>
+    </div>
+  </div>
 </div>
 
 <div id="fluidApp" class="simApp hidden">

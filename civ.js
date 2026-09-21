@@ -588,6 +588,9 @@
     speechLog.length = 0;
     lastNuke = null;
     nukeEffects = [];
+    raidCooldownUntil = new Map();
+    lastAirstrikeAt = new Map();
+    lastNukeDecisionAt = new Map();
     nextId = 1;
     nextNationHue = 0;
     history.length = 0;
@@ -970,10 +973,16 @@
       nation.isHegemon = nation.hegemony > 80;
 
       // Leader succession: usually stays within the ruling family (a new
-      // name, same dynasty); rarely a rival family seizes power instead,
-      // which can also shift the nation's ideology.
+      // name, same dynasty); a rival family seizes power instead when the
+      // nation's own state gives it real grounds to -- weak legitimacy
+      // (low faith) or a fracturing realm (most regions have already
+      // drifted off the official ideology) -- not by chance.
       if (simTime - nation.leader.termStart > nation.leader.termLength) {
-        const revolution = rng() < 0.12;
+        const nonCapitalSettlements = nationSettlements.filter((s) => !s.isCapital);
+        const divergedFrac = nonCapitalSettlements.length
+          ? nonCapitalSettlements.filter((s) => s.ideology !== nation.ideology).length / nonCapitalSettlements.length
+          : 0;
+        const revolution = nation.faith < 0.3 || divergedFrac > 0.4;
         const oldDynasty = nation.leader.dynasty;
         const culture = revolution ? pickCulture() : nation.culture;
         const dynasty = revolution ? genFamilyName(culture) : nation.leader.dynasty;
@@ -998,14 +1007,16 @@
 
   // ---------- WAR & PLUNDER -------------------------------------------
   const RAID_RANGE = 22;
-  const RAID_CHANCE = 0.25; // expected raids per nearby settlement pair per simulated second, while at war
+  const RAID_COOLDOWN = 6; // sim-seconds before either side in a raid can raid again -- pacing, not chance
+  let raidCooldownUntil = new Map(); // settlementId -> simTime
   function performRaid(sa, na, sb, nb) {
     // hegemony (tech + rare specialty goods + population) gives real
-    // combat weight, not just raw settlement population
+    // combat weight, not just raw settlement population. The stronger
+    // side is the one that presses the attack -- a military read of the
+    // situation, not a weighted lottery.
     const aPower = sa.population * (1 + (na.hegemony || 0) / 300);
     const bPower = sb.population * (1 + (nb.hegemony || 0) / 300);
-    const totalPower = aPower + bPower || 1;
-    const aIsAttacker = rng() < aPower / totalPower;
+    const aIsAttacker = aPower >= bPower;
     const attacker = aIsAttacker ? sa : sb, attackerNation = aIsAttacker ? na : nb;
     const defender = aIsAttacker ? sb : sa, defenderNation = aIsAttacker ? nb : na;
 
@@ -1034,14 +1045,13 @@
       }
     }
 
-    // a decisive raid can outright capture a non-capital settlement --
-    // territory actually changes hands, not just population/resources. A
-    // rare or legendary specialty good makes the defender a more coveted
-    // conquest target.
-    const decisive = attacker.population > defender.population * 1.4;
+    // A raid outright captures a non-capital settlement -- territory
+    // actually changes hands -- once the power gap is wide enough to
+    // make annexation viable. A rare or legendary specialty good is
+    // worth pushing harder for, so it lowers the bar.
     const defenderRarity = defenderNation.specialty && defenderNation.specialty.rarity;
-    const captureChance = 0.18 + (defenderRarity === '전설' ? 0.12 : defenderRarity === '희귀' ? 0.06 : 0);
-    if (decisive && !defender.isCapital && rng() < captureChance) {
+    const requiredRatio = 1.4 - (defenderRarity === '전설' ? 0.25 : defenderRarity === '희귀' ? 0.12 : 0);
+    if (!defender.isCapital && attacker.population > defender.population * requiredRatio) {
       defenderNation.settlementIds = defenderNation.settlementIds.filter((id) => id !== defender.id);
       attackerNation.settlementIds.push(defender.id);
       defender.nationId = attackerNation.id;
@@ -1099,15 +1109,30 @@
   }
   const AIRSTRIKE_CIV_LEVEL = 4;
   const NUKE_CIV_LEVEL = 6; // nukes require 현대, not just 근대
+  const AIRSTRIKE_COOLDOWN = 20; // sim-seconds -- a campaign needs time to rearm, not a dice roll each check
+  const NUKE_COOLDOWN = 90;
+  const NUKE_RELATION_THRESHOLD = -90; // a last resort, only once a war is this far gone
+  let lastAirstrikeAt = new Map(); // nationId -> simTime
+  let lastNukeDecisionAt = new Map();
   function considerAdvancedStrike(attackerNation, defenderNation) {
     const targets = settlements.filter((s) => s.nationId === defenderNation.id);
     if (!targets.length) return;
-    if (attackerNation.civLevel >= NUKE_CIV_LEVEL && rng() < 0.00035 * WAR_CHECK_INTERVAL) {
-      performNuclearStrike(attackerNation, defenderNation, pick(targets));
-      return;
+    // always strikes the enemy's most populous holding -- the highest-value target, not a random pick
+    const target = targets.reduce((best, s) => (s.population > best.population ? s : best));
+    if (attackerNation.civLevel >= NUKE_CIV_LEVEL) {
+      const last = lastNukeDecisionAt.get(attackerNation.id) || -Infinity;
+      if (simTime - last > NUKE_COOLDOWN && getRelation(attackerNation.id, defenderNation.id) < NUKE_RELATION_THRESHOLD) {
+        performNuclearStrike(attackerNation, defenderNation, target);
+        lastNukeDecisionAt.set(attackerNation.id, simTime);
+        return;
+      }
     }
-    if (attackerNation.civLevel >= AIRSTRIKE_CIV_LEVEL && rng() < 0.006 * WAR_CHECK_INTERVAL) {
-      performAirStrike(attackerNation, pick(targets));
+    if (attackerNation.civLevel >= AIRSTRIKE_CIV_LEVEL) {
+      const last = lastAirstrikeAt.get(attackerNation.id) || -Infinity;
+      if (simTime - last > AIRSTRIKE_COOLDOWN) {
+        performAirStrike(attackerNation, target);
+        lastAirstrikeAt.set(attackerNation.id, simTime);
+      }
     }
   }
   function tickWarPlunder() {
@@ -1120,9 +1145,14 @@
         const aSettlements = settlements.filter((s) => s.nationId === a.id);
         const bSettlements = settlements.filter((s) => s.nationId === b.id);
         for (const sa of aSettlements) {
+          if ((raidCooldownUntil.get(sa.id) || 0) > simTime) continue;
           for (const sb of bSettlements) {
+            if ((raidCooldownUntil.get(sb.id) || 0) > simTime) continue;
             if (Math.hypot(sa.x - sb.x, sa.y - sb.y) > RAID_RANGE) continue;
-            if (rng() < RAID_CHANCE * WAR_CHECK_INTERVAL) performRaid(sa, a, sb, b);
+            performRaid(sa, a, sb, b);
+            raidCooldownUntil.set(sa.id, simTime + RAID_COOLDOWN);
+            raidCooldownUntil.set(sb.id, simTime + RAID_COOLDOWN);
+            break; // this settlement just committed to a raid -- move on
           }
         }
       }
@@ -1170,16 +1200,20 @@
     '침묵하시오, 아직 당신 차례가 아니다.', '뻔뻔하군.', '그러는 당신들은 어떻고?',
     '이 자리에서 할 말은 아니지 않은가.', '증거를 대라!',
   ];
+  // A nation's decision to attend is a logical read of its own interest --
+  // personality, standing, and current stakes -- weighed against a fixed
+  // bar, not a dice roll. The same nation in the same situation always
+  // reaches the same verdict; different nations differ because their
+  // traits and circumstances genuinely differ.
   function willAttendCouncil(nation) {
-    let score = 0.62; // most nations show up to a summit by default
+    let score = 0.62; // most nations see enough value in a summit to show up
     if (nation.leader.personality === '고립주의적') score -= 0.35;
     if (nation.leader.personality === '이상주의적' || nation.leader.personality === '자비로운') score += 0.15;
     if (nation.leader.personality === '전제적' || nation.leader.personality === '음모적') score -= 0.15;
     score += (nation.civLevel - 3) * 0.03;
     const atWarCount = nations.filter((o) => o.id !== nation.id && isAtWar(nation.id, o.id)).length;
-    score += Math.min(0.2, atWarCount * 0.08);
-    score += rrand(-0.15, 0.15);
-    return rng() < clamp(score, 0.05, 0.95);
+    score += Math.min(0.2, atWarCount * 0.08); // more to gain from mediation the more wars it's fighting
+    return score >= 0.5;
   }
   function pickCouncilAgenda(attendees) {
     for (let i = 0; i < attendees.length; i++) {
@@ -1247,10 +1281,20 @@
     const speaker = councilAttendees[councilSpeakerIdx];
     const lineOptions = COUNCIL_LINES[councilAgenda] ? COUNCIL_LINES[councilAgenda](speaker, councilAgendaCtx) : ['...'];
     councilCurrentBubble = { nationId: speaker.id, text: pick(lineOptions) };
+    // Whether anyone interrupts, and who, is read off the room's actual
+    // mood rather than a coin flip: whoever has the worst relationship
+    // with the current speaker is the one most likely to object, and
+    // they only actually do it once that relationship is bad enough to
+    // cross into real hostility -- a threshold judgment, not chance.
     councilInterruptBubble = null;
-    const candidates = councilAttendees.filter((o) => o.id !== speaker.id && getRelation(o.id, speaker.id) < -20);
-    if (candidates.length && rng() < 0.35) {
-      councilInterruptBubble = { nationId: pick(candidates).id, text: pick(COUNCIL_INTERRUPTIONS) };
+    let worst = null;
+    for (const o of councilAttendees) {
+      if (o.id === speaker.id) continue;
+      const rel = getRelation(o.id, speaker.id);
+      if (!worst || rel < worst.rel) worst = { nation: o, rel };
+    }
+    if (worst && worst.rel < -40) {
+      councilInterruptBubble = { nationId: worst.nation.id, text: pick(COUNCIL_INTERRUPTIONS) };
     }
     councilPhaseTimer = 0;
   }

@@ -128,6 +128,7 @@
     </div>
     <div class="toolgroup">
       <button id="civDiplomacyBtn" title="외교 관계 및 지역 사상 보기">🕊️ 외교</button>
+      <button id="civCouncilBtn" title="세계 회의 소집 (과반이 참여해야 성사됩니다)">🌐 세계 회의</button>
     </div>
   </div>
 
@@ -188,6 +189,18 @@
   </div>
 
   <div id="civToastContainer" class="civToastContainer"></div>
+
+  <div id="civCouncilOverlay" class="civModalOverlay hidden">
+    <div class="civModalCard civCouncilCard">
+      <div class="civModalHeader">
+        <h2>🌐 세계기구 — 세계 회의</h2>
+        <button id="civCouncilCloseBtn" title="닫기">✕</button>
+      </div>
+      <div id="civCouncilAgendaLabel" class="civCouncilAgenda"></div>
+      <canvas id="civCouncilCanvas"></canvas>
+      <p class="civCouncilHint">회의가 진행되는 동안 배속은 1배속으로 고정됩니다.</p>
+    </div>
+  </div>
 </div>
 
 <div id="fluidApp" class="simApp hidden">

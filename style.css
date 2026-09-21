@@ -71,6 +71,8 @@ button{
 }
 button:hover{background:#241d17;}
 button:active{transform:scale(.96);}
+button:disabled{opacity:.4; cursor:not-allowed;}
+button:disabled:hover{background:var(--panel-bg);}
 button.active{
   border-color:var(--gold);
   background:#2c2312;
@@ -591,6 +593,14 @@ input[type=range]::-moz-range-thumb{
 .civDiploNationHead b{color:var(--ink);}
 .civDiploNationHead .civMeta{color:var(--ink-dim); font-size:.64rem;}
 .civDiploNationHead b{font-size:.82rem;}
+.civHegemonBadge{
+  background:rgba(217,166,43,.18);
+  border:1px solid var(--gold);
+  color:var(--gold);
+  font-size:.6rem;
+  padding:1px 7px;
+  border-radius:20px;
+}
 .civDiploStatGrid{
   display:grid;
   grid-template-columns:auto 1fr;
@@ -682,3 +692,28 @@ input[type=range]::-moz-range-thumb{
 .civToast.toast-power{border-color:var(--orange);}
 .civToast.toast-war{border-color:var(--red);}
 .civToast.toast-nuke{border-color:var(--red); box-shadow:0 4px 20px rgba(255,0,69,.35);}
+
+.civCouncilCard{width:min(880px, 100%);}
+.civCouncilAgenda{
+  padding:7px 16px;
+  color:var(--gold);
+  font-size:.76rem;
+  border-bottom:1px solid #3a3128;
+  background:var(--panel-bg2);
+  flex:none;
+}
+#civCouncilCanvas{
+  width:100%;
+  height:min(60vh, 460px);
+  display:block;
+  background:#231a12;
+}
+.civCouncilHint{
+  margin:0;
+  padding:6px 16px;
+  text-align:center;
+  font-size:.62rem;
+  color:var(--ink-dim);
+  background:var(--panel-bg2);
+  flex:none;
+}

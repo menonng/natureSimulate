@@ -82,6 +82,9 @@
   let accumulator = 0;
   let currentSeed = '';
   let selectedNationId = null; // set by clicking a nation in the list; highlights its settlements on the map
+  let lastNuke = null; // { attackerId, attackerName, time } -- feeds the world council's agenda
+  let nukeEffects = []; // { x, y, time } -- transient mushroom-cloud visuals on the map
+  const NUKE_EFFECT_DURATION = 3.5;
 
   const history = [];
   const HISTORY_MAX = 600;
@@ -217,21 +220,24 @@
     return root + '가';
   }
 
-  const IDEOLOGIES = ['군주제', '신정', '공화정', '전체주의', '부족연합'];
-  const LEADER_TITLE = { 군주제: '왕', 신정: '대사제', 공화정: '대통령', 전체주의: '총통', 부족연합: '족장' };
-  const REGIONAL_TITLE = { 군주제: '영주', 신정: '사제', 공화정: '시장', 전체주의: '지구서기', 부족연합: '촌장' };
-  const CIV_TIER_NAME = ['', '석기시대', '청동기시대', '고대', '중세', '근대'];
+  const IDEOLOGIES = ['군주제', '신정', '공화정', '전체주의', '부족연합', '사회주의'];
+  const LEADER_TITLE = { 군주제: '왕', 신정: '대사제', 공화정: '대통령', 전체주의: '총통', 부족연합: '족장', 사회주의: '서기장' };
+  const REGIONAL_TITLE = { 군주제: '영주', 신정: '사제', 공화정: '시장', 전체주의: '지구서기', 부족연합: '촌장', 사회주의: '인민위원' };
+  const CIV_TIER_NAME = ['', '석기시대', '청동기시대', '고대', '중세', '근대', '현대'];
 
   // How compatible two ideologies are, used both to bias inter-nation
   // diplomacy drift and to weight which ideology a drifting region is
   // likely to adopt (regions drift toward ideologies they're already
-  // philosophically close to, not to a uniformly random one).
+  // philosophically close to, not to a uniformly random one). 사회주의
+  // leans toward 전체주의 (both collectivist/state-control systems) and
+  // sharply away from 군주제.
   const IDEOLOGY_AFFINITY = {
-    군주제: { 군주제: 6, 신정: 4, 공화정: -4, 전체주의: -2, 부족연합: 1 },
-    신정: { 군주제: 4, 신정: 6, 공화정: -2, 전체주의: -3, 부족연합: 2 },
-    공화정: { 군주제: -4, 신정: -2, 공화정: 6, 전체주의: -6, 부족연합: 0 },
-    전체주의: { 군주제: -2, 신정: -3, 공화정: -6, 전체주의: 3, 부족연합: -3 },
-    부족연합: { 군주제: 1, 신정: 2, 공화정: 0, 전체주의: -3, 부족연합: 5 },
+    군주제: { 군주제: 6, 신정: 4, 공화정: -4, 전체주의: -2, 부족연합: 1, 사회주의: -5 },
+    신정: { 군주제: 4, 신정: 6, 공화정: -2, 전체주의: -3, 부족연합: 2, 사회주의: -3 },
+    공화정: { 군주제: -4, 신정: -2, 공화정: 6, 전체주의: -6, 부족연합: 0, 사회주의: -2 },
+    전체주의: { 군주제: -2, 신정: -3, 공화정: -6, 전체주의: 3, 부족연합: -3, 사회주의: 3 },
+    부족연합: { 군주제: 1, 신정: 2, 공화정: 0, 전체주의: -3, 부족연합: 5, 사회주의: 1 },
+    사회주의: { 군주제: -5, 신정: -3, 공화정: -2, 전체주의: 3, 부족연합: 1, 사회주의: 6 },
   };
   function personalityDiploBias(personality) {
     if (personality === '호전적' || personality === '팽창주의적' || personality === '전제적') return -1;
@@ -296,11 +302,22 @@
   // conditioning for the leader-speech LLM later.
   const PERSONALITIES = ['호전적', '경건한', '실용적', '고립주의적', '팽창주의적', '자비로운', '전제적', '이상주의적', '음모적', '검소한'];
   const PHILOSOPHIES = ['자유', '질서', '전통', '혁신', '명예', '부', '신앙', '정복', '평등', '혈통'];
-  function genLeader(dynasty, culture) {
+  // 현대 (civLevel 6) leaders are more likely to be pushed to an extreme --
+  // either sharply war-averse or a war hawk -- rather than the calmer
+  // uniform spread of personalities earlier eras produce.
+  const WAR_AVERSE_PERSONALITIES = ['고립주의적', '자비로운', '이상주의적'];
+  const WAR_HAWK_PERSONALITIES = ['호전적', '팽창주의적', '전제적'];
+  function genLeader(dynasty, culture, civLevel) {
+    let personality;
+    if (civLevel >= 6 && rng() < 0.55) {
+      personality = pick(rng() < 0.5 ? WAR_AVERSE_PERSONALITIES : WAR_HAWK_PERSONALITIES);
+    } else {
+      personality = pick(PERSONALITIES);
+    }
     return {
       name: genPersonName(culture),
       dynasty,
-      personality: pick(PERSONALITIES),
+      personality,
       philosophy: pick(PHILOSOPHIES),
       termStart: simTime,
       termLength: rrand(90, 240), // simulated seconds before succession
@@ -367,15 +384,24 @@
     nuclear_strike: (n, ctx) => [`${ctx.settlementName}에 핵무기를 사용했다.`, `돌이킬 수 없는 선택이었다.`, `${ctx.settlementName}은(는) 이제 잿더미다.`],
     capital_relocated: (n, ctx) => [`${ctx.settlementName}을(를) 새로운 수도로 삼는다.`, `우리는 무너지지 않는다.`, `잿더미 위에서도 나라는 계속된다.`],
   };
+  // 현대 leaders speak with an "upgraded" voice: one extra, more
+  // sophisticated line woven in, standing in for a more capable
+  // leader-speech LLM at that tier.
+  const SPEECH_MODERN_INSIGHTS = [
+    '데이터가 이미 답을 알려주고 있다.', '세계는 그 어느 때보다 서로 연결되어 있다.',
+    '정보의 시대에는 정보를 쥔 자가 이긴다.', '기술이 곧 국력이다.',
+    '이제 우리는 과거와 다른 셈법으로 움직인다.', '실시간으로 세계가 우리를 지켜보고 있다.',
+  ];
   function generateLeaderSpeech(nation, eventType, ctx) {
     const L = nation.leader;
     const opener = pick(SPEECH_OPENERS[L.personality] || ['...']);
     const coreOptions = SPEECH_EVENT_CORE[eventType] ? SPEECH_EVENT_CORE[eventType](nation, ctx || {}) : ['...'];
     const core = pick(coreOptions);
     const closer = pick(SPEECH_PHILOSOPHY_CLOSERS[L.philosophy] || ['...']);
+    const modern = nation.civLevel >= 6 ? ' ' + pick(SPEECH_MODERN_INSIGHTS) : '';
     const signature = hashPick(SPEECH_SIGNATURES, L.name + L.dynasty)
       .replace('{name}', L.name).replace('{dynasty}', L.dynasty);
-    return `${opener} ${core} ${closer} ${signature}`.trim();
+    return `${opener} ${core} ${closer}${modern} ${signature}`.trim();
   }
 
   const speechLog = [];
@@ -560,6 +586,8 @@
     relationCls = new Map();
     warAccum = 0;
     speechLog.length = 0;
+    lastNuke = null;
+    nukeEffects = [];
     nextId = 1;
     nextNationHue = 0;
     history.length = 0;
@@ -622,6 +650,43 @@
 
   // ---------- NATIONS -------------------------------------------------
   const NATION_JOIN_RADIUS = 34;
+  // ---------- SPECIALTY GOODS & HEGEMONY -----------------------------------
+  // A nation's specialty is read off the terrain around its founding site,
+  // with a random rarity tier layered on top. A rare or legendary good
+  // makes a nation both more formidable in war (part of its hegemony
+  // score, which gives real combat power -- see performRaid) and more
+  // coveted as a conquest target (a bonus to being captured outright).
+  const SPECIALTY_RARITY_WEIGHT = { 일반: 5, 희귀: 20, 전설: 45 };
+  function assignSpecialty(x, y) {
+    const cx = Math.floor(x), cy = Math.floor(y);
+    const counts = { plains: 0, hills: 0, mountain: 0, coast: 0, snow: 0, river: 0 };
+    for (let dy = -4; dy <= 4; dy++) {
+      for (let dx = -4; dx <= 4; dx++) {
+        const px = cx + dx, py = cy + dy;
+        if (!inBounds(px, py)) continue;
+        const i = idx(px, py);
+        const t = cellType[i];
+        if (t === T_PLAINS) counts.plains++;
+        else if (t === T_HILLS) counts.hills++;
+        else if (t === T_MOUNTAIN) counts.mountain++;
+        else if (t === T_COAST) counts.coast++;
+        else if (t === T_SNOW) counts.snow++;
+        if (isRiver[i]) counts.river++;
+      }
+    }
+    const candidates = [];
+    if (counts.mountain > 3) candidates.push({ id: 'ore', name: '광물' });
+    if (counts.hills > 3) candidates.push({ id: 'wine', name: '포도주' }, { id: 'stone', name: '석재' });
+    if (counts.coast > 3) candidates.push({ id: 'fish', name: '수산물' }, { id: 'spice', name: '향신료' });
+    if (counts.snow > 3) candidates.push({ id: 'fur', name: '모피' });
+    if (counts.river > 2) candidates.push({ id: 'silk', name: '비단' });
+    if (!candidates.length) candidates.push({ id: 'grain', name: '곡물' });
+    const good = pick(candidates);
+    const roll = rng();
+    const rarity = roll < 0.1 ? '전설' : roll < 0.4 ? '희귀' : '일반';
+    return { id: good.id, name: good.name, rarity };
+  }
+
   function foundNation(x, y) {
     const ideology = pick(IDEOLOGIES);
     const culture = pickCulture();
@@ -635,7 +700,7 @@
       ideology,
       culture,
       dynasty,
-      leader: genLeader(dynasty, culture),
+      leader: genLeader(dynasty, culture, 1),
       religion: genReligionName(),
       faith: rrand(0.05, 0.15),
       age: 0,
@@ -643,6 +708,8 @@
       civLevel: 1,
       totalPopulation: 0,
       raceTotals: new Array(RACES.length).fill(0),
+      specialty: assignSpecialty(x, y),
+      hegemony: 0,
     };
     nations.push(nation);
     pushSpeech(nation, '건국 선언', 'founding');
@@ -891,7 +958,16 @@
       nation.totalPopulation = pop;
       nation.raceTotals = raceTotals;
       nation.civLevel = clamp(1 + Math.floor(pop / 180) + Math.floor(nation.age / 260) + Math.floor(nation.settlementIds.length / 3), 1, 5);
+      // 현대 (civLevel 6) is a far steeper climb than any earlier era -- not
+      // just +1 on the same linear scale, but roughly a 10x jump in scale
+      // (population, age, settlement count) over what level 5 itself needed.
+      if (nation.civLevel >= 5 && pop >= 1800 && nation.age >= 2600 && nation.settlementIds.length >= 12) {
+        nation.civLevel = 6;
+      }
       nation.faith = clamp(nation.faith + 0.0004 * dt * (1 + nation.civLevel * 0.2), 0, 1);
+      const rarityWeight = (nation.specialty && SPECIALTY_RARITY_WEIGHT[nation.specialty.rarity]) || 0;
+      nation.hegemony = nation.civLevel * 8 + rarityWeight + Math.sqrt(pop);
+      nation.isHegemon = nation.hegemony > 80;
 
       // Leader succession: usually stays within the ruling family (a new
       // name, same dynasty); rarely a rival family seizes power instead,
@@ -906,7 +982,7 @@
           nation.culture = culture;
           nation.ideology = pick(IDEOLOGIES);
         }
-        nation.leader = genLeader(dynasty, culture);
+        nation.leader = genLeader(dynasty, culture, nation.civLevel);
         pushSpeech(nation, revolution ? '왕조 교체' : '지도자 승계', 'succession');
         if (revolution) {
           showGlobalNotification(`⚔️ ${nation.name}: ${oldDynasty} 몰락, ${dynasty} 집권.`, 'power');
@@ -924,8 +1000,12 @@
   const RAID_RANGE = 22;
   const RAID_CHANCE = 0.25; // expected raids per nearby settlement pair per simulated second, while at war
   function performRaid(sa, na, sb, nb) {
-    const totalPop = sa.population + sb.population || 1;
-    const aIsAttacker = rng() < sa.population / totalPop; // the larger side has the military edge
+    // hegemony (tech + rare specialty goods + population) gives real
+    // combat weight, not just raw settlement population
+    const aPower = sa.population * (1 + (na.hegemony || 0) / 300);
+    const bPower = sb.population * (1 + (nb.hegemony || 0) / 300);
+    const totalPower = aPower + bPower || 1;
+    const aIsAttacker = rng() < aPower / totalPower;
     const attacker = aIsAttacker ? sa : sb, attackerNation = aIsAttacker ? na : nb;
     const defender = aIsAttacker ? sb : sa, defenderNation = aIsAttacker ? nb : na;
 
@@ -955,9 +1035,13 @@
     }
 
     // a decisive raid can outright capture a non-capital settlement --
-    // territory actually changes hands, not just population/resources
+    // territory actually changes hands, not just population/resources. A
+    // rare or legendary specialty good makes the defender a more coveted
+    // conquest target.
     const decisive = attacker.population > defender.population * 1.4;
-    if (decisive && !defender.isCapital && rng() < 0.18) {
+    const defenderRarity = defenderNation.specialty && defenderNation.specialty.rarity;
+    const captureChance = 0.18 + (defenderRarity === '전설' ? 0.12 : defenderRarity === '희귀' ? 0.06 : 0);
+    if (decisive && !defender.isCapital && rng() < captureChance) {
       defenderNation.settlementIds = defenderNation.settlementIds.filter((id) => id !== defender.id);
       attackerNation.settlementIds.push(defender.id);
       defender.nationId = attackerNation.id;
@@ -1001,6 +1085,8 @@
     scorchAround(target.x, target.y, 6, 0.03);
     pushSpeech(attackerNation, '핵무기 사용', 'nuclear_strike', { settlementName: target.name });
     showGlobalNotification(`💥 ${attackerNation.name}이(가) ${target.name}(${defenderNation.name})에 핵무기를 사용했습니다.`, 'nuke');
+    lastNuke = { attackerId: attackerNation.id, attackerName: attackerNation.name, time: simTime };
+    nukeEffects.push({ x: target.x, y: target.y, time: simTime });
     // the world recoils: relations with the victim bottom out, and every
     // other nation grows warier of the attacker, not just the target
     relations.set(relationKey(attackerNation.id, defenderNation.id), -100);
@@ -1012,7 +1098,7 @@
     }
   }
   const AIRSTRIKE_CIV_LEVEL = 4;
-  const NUKE_CIV_LEVEL = 5;
+  const NUKE_CIV_LEVEL = 6; // nukes require 현대, not just 근대
   function considerAdvancedStrike(attackerNation, defenderNation) {
     const targets = settlements.filter((s) => s.nationId === defenderNation.id);
     if (!targets.length) return;
@@ -1040,6 +1126,278 @@
           }
         }
       }
+    }
+  }
+
+  // ---------- WORLD COUNCIL -------------------------------------------
+  // A neutral, no-nation body (세계기구) that any request can convene: each
+  // nation's rule-based "judgment" (personality, current stakes, relation
+  // to any war it's already in) decides whether attending serves its own
+  // interest, and if a majority show up the summit actually happens --
+  // a round table, seated leaders, speech bubbles, and the occasional
+  // interruption from someone with a grudge against whoever's talking.
+  let councilOpen = false;
+  let councilAttendees = [];
+  let councilSpeakerIdx = -1;
+  let councilPhase = 'idle'; // 'speaking' | 'result'
+  let councilPhaseTimer = 0;
+  let councilAgenda = null;
+  let councilAgendaCtx = null;
+  let councilCurrentBubble = null;
+  let councilInterruptBubble = null;
+  let councilOutcomeText = '';
+  let savedSpeedMultiplier = 1;
+  const COUNCIL_SPEAK_DURATION = 3.4;
+  const COUNCIL_RESULT_DURATION = 5.5;
+  const COUNCIL_AGENDA_LABEL = { trade: '🤝 통상 협력 회의', war_mediation: '⚖️ 분쟁 중재 회의', condemn_nuke: '🚫 핵무기 규탄 회의' };
+  const COUNCIL_LINES = {
+    trade: (n) => [
+      `${n.name}은(는) 자유로운 교역을 지지한다.`,
+      n.specialty ? `${n.specialty.name} 교역으로 서로 이득을 보자.` : '함께 번영하는 길을 찾자.',
+      '통상로를 넓혀야 한다.', '고립은 쇠퇴로 가는 길이다.',
+    ],
+    war_mediation: (n, ctx) => [
+      `${ctx.warA}와(과) ${ctx.warB}의 다툼은 우리 모두의 문제다.`,
+      '더 이상의 피해는 막아야 한다.', '중재가 필요한 때다.', '평화가 모두에게 이득이다.',
+    ],
+    condemn_nuke: (n, ctx) => [
+      `${ctx.offender}의 핵무기 사용을 규탄한다.`,
+      '이런 일이 다시 있어서는 안 된다.', '책임을 물어야 한다.', '문명국이라면 해서는 안 될 일이었다.',
+    ],
+  };
+  const COUNCIL_INTERRUPTIONS = [
+    '말도 안 되는 소리!', '그건 당신 나라 사정이다.', '누가 그 말을 믿겠는가.',
+    '침묵하시오, 아직 당신 차례가 아니다.', '뻔뻔하군.', '그러는 당신들은 어떻고?',
+    '이 자리에서 할 말은 아니지 않은가.', '증거를 대라!',
+  ];
+  function willAttendCouncil(nation) {
+    let score = 0.62; // most nations show up to a summit by default
+    if (nation.leader.personality === '고립주의적') score -= 0.35;
+    if (nation.leader.personality === '이상주의적' || nation.leader.personality === '자비로운') score += 0.15;
+    if (nation.leader.personality === '전제적' || nation.leader.personality === '음모적') score -= 0.15;
+    score += (nation.civLevel - 3) * 0.03;
+    const atWarCount = nations.filter((o) => o.id !== nation.id && isAtWar(nation.id, o.id)).length;
+    score += Math.min(0.2, atWarCount * 0.08);
+    score += rrand(-0.15, 0.15);
+    return rng() < clamp(score, 0.05, 0.95);
+  }
+  function pickCouncilAgenda(attendees) {
+    for (let i = 0; i < attendees.length; i++) {
+      for (let j = i + 1; j < attendees.length; j++) {
+        if (isAtWar(attendees[i].id, attendees[j].id)) {
+          return { type: 'war_mediation', ctx: { warA: attendees[i].name, warB: attendees[j].name, warAId: attendees[i].id, warBId: attendees[j].id } };
+        }
+      }
+    }
+    if (lastNuke && simTime - lastNuke.time < 300 && attendees.some((n) => n.id !== lastNuke.attackerId)) {
+      return { type: 'condemn_nuke', ctx: { offender: lastNuke.attackerName, offenderId: lastNuke.attackerId } };
+    }
+    return { type: 'trade', ctx: {} };
+  }
+  function requestWorldCouncil() {
+    if (councilOpen) return;
+    if (nations.length < 2) { showGlobalNotification('🌐 참여할 국가가 부족합니다.', 'info'); return; }
+    const attendees = nations.filter((n) => willAttendCouncil(n));
+    if (attendees.length <= nations.length / 2) {
+      showGlobalNotification(`🌐 세계 회의 소집 실패 (참여 ${attendees.length}/${nations.length}개국, 과반 미달).`, 'info');
+      return;
+    }
+    openWorldCouncil(attendees);
+  }
+  function openWorldCouncil(attendees) {
+    councilAttendees = [...attendees].sort((a, b) => b.totalPopulation - a.totalPopulation).slice(0, 12);
+    const agenda = pickCouncilAgenda(councilAttendees);
+    councilAgenda = agenda.type;
+    councilAgendaCtx = agenda.ctx;
+    councilSpeakerIdx = -1;
+    councilPhase = 'speaking';
+    councilPhaseTimer = 999; // forces an immediate advance to the first speaker
+    councilOutcomeText = '';
+    councilCurrentBubble = null;
+    councilInterruptBubble = null;
+    savedSpeedMultiplier = speedMultiplier;
+    speedMultiplier = 1;
+    document.querySelectorAll('.civSpeedBtn').forEach((b) => {
+      b.classList.toggle('active', b.dataset.speed === '1');
+      b.disabled = true; // belt-and-suspenders: the fixed overlay sits above these anyway
+    });
+    councilOpen = true;
+    document.getElementById('civCouncilOverlay').classList.remove('hidden');
+    document.getElementById('civCouncilAgendaLabel').textContent = COUNCIL_AGENDA_LABEL[councilAgenda] || '';
+    resizeCouncilCanvas();
+    showGlobalNotification(`🌐 세계 회의가 소집되었습니다 (${councilAttendees.length}개국 참여).`, 'info');
+  }
+  function closeWorldCouncil() {
+    councilOpen = false;
+    document.getElementById('civCouncilOverlay').classList.add('hidden');
+    speedMultiplier = savedSpeedMultiplier;
+    document.querySelectorAll('.civSpeedBtn').forEach((b) => {
+      b.classList.toggle('active', Number(b.dataset.speed) === speedMultiplier);
+      b.disabled = false;
+    });
+  }
+  function advanceCouncilSpeaker() {
+    councilSpeakerIdx++;
+    if (councilSpeakerIdx >= councilAttendees.length) {
+      councilPhase = 'result';
+      councilPhaseTimer = 0;
+      resolveCouncil();
+      return;
+    }
+    const speaker = councilAttendees[councilSpeakerIdx];
+    const lineOptions = COUNCIL_LINES[councilAgenda] ? COUNCIL_LINES[councilAgenda](speaker, councilAgendaCtx) : ['...'];
+    councilCurrentBubble = { nationId: speaker.id, text: pick(lineOptions) };
+    councilInterruptBubble = null;
+    const candidates = councilAttendees.filter((o) => o.id !== speaker.id && getRelation(o.id, speaker.id) < -20);
+    if (candidates.length && rng() < 0.35) {
+      councilInterruptBubble = { nationId: pick(candidates).id, text: pick(COUNCIL_INTERRUPTIONS) };
+    }
+    councilPhaseTimer = 0;
+  }
+  function tickCouncil(dt) {
+    councilPhaseTimer += dt;
+    if (councilPhase === 'speaking') {
+      if (councilPhaseTimer >= COUNCIL_SPEAK_DURATION) advanceCouncilSpeaker();
+    } else if (councilPhase === 'result') {
+      if (councilPhaseTimer >= COUNCIL_RESULT_DURATION) closeWorldCouncil();
+    }
+  }
+  function resolveCouncil() {
+    if (councilAgenda === 'trade') {
+      for (let i = 0; i < councilAttendees.length; i++) {
+        for (let j = i + 1; j < councilAttendees.length; j++) {
+          const key = relationKey(councilAttendees[i].id, councilAttendees[j].id);
+          const cur = relations.has(key) ? relations.get(key) : 0;
+          relations.set(key, clamp(cur + 12, -100, 100));
+        }
+      }
+      councilOutcomeText = '통상 협정이 체결되어 참가국들의 관계가 개선되었습니다.';
+    } else if (councilAgenda === 'war_mediation') {
+      const { warAId, warBId, warA, warB } = councilAgendaCtx;
+      const key = relationKey(warAId, warBId);
+      const cur = relations.has(key) ? relations.get(key) : 0;
+      relations.set(key, clamp(cur + 25, -100, 100));
+      councilOutcomeText = `${warA}와(과) ${warB}의 중재가 이루어졌습니다.`;
+    } else if (councilAgenda === 'condemn_nuke') {
+      const { offenderId, offender } = councilAgendaCtx;
+      for (const o of councilAttendees) {
+        if (o.id === offenderId) continue;
+        const key = relationKey(o.id, offenderId);
+        const cur = relations.has(key) ? relations.get(key) : 0;
+        relations.set(key, clamp(cur - 15, -100, 100));
+      }
+      councilOutcomeText = `${offender}에 대한 국제 사회의 규탄이 선언되었습니다.`;
+    }
+    showGlobalNotification(`🌐 세계 회의 결과: ${councilOutcomeText}`, 'info');
+  }
+
+  function resizeCouncilCanvas() {
+    const canvas = document.getElementById('civCouncilCanvas');
+    const rect = canvas.getBoundingClientRect();
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.max(1, Math.round(rect.width * dpr));
+    canvas.height = Math.max(1, Math.round(rect.height * dpr));
+  }
+  function wrapCouncilText(ctx, text, maxWidth) {
+    const words = text.split(' ');
+    const lines = [];
+    let cur = '';
+    for (const w of words) {
+      const test = cur ? cur + ' ' + w : w;
+      if (ctx.measureText(test).width > maxWidth && cur) { lines.push(cur); cur = w; }
+      else cur = test;
+    }
+    if (cur) lines.push(cur);
+    return lines;
+  }
+  function drawCouncilBubble(ctx, cx, bottomY, text, maxWidth, fontPx) {
+    ctx.font = `${fontPx}px 'Nanum Myeongjo', Georgia, serif`;
+    const lines = wrapCouncilText(ctx, text, maxWidth - 20);
+    const lineH = fontPx * 1.3;
+    let widest = 0;
+    for (const l of lines) widest = Math.max(widest, ctx.measureText(l).width);
+    const boxW = Math.min(maxWidth, widest + 20);
+    const boxH = lines.length * lineH + 14;
+    const boxX = cx - boxW / 2, boxY = bottomY - boxH - 10;
+    const r = 8;
+    ctx.fillStyle = 'rgba(20,16,12,0.92)';
+    ctx.strokeStyle = '#D9A62B';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(boxX + r, boxY);
+    ctx.arcTo(boxX + boxW, boxY, boxX + boxW, boxY + boxH, r);
+    ctx.arcTo(boxX + boxW, boxY + boxH, boxX, boxY + boxH, r);
+    ctx.arcTo(boxX, boxY + boxH, boxX, boxY, r);
+    ctx.arcTo(boxX, boxY, boxX + boxW, boxY, r);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx - 7, boxY + boxH);
+    ctx.lineTo(cx + 7, boxY + boxH);
+    ctx.lineTo(cx, boxY + boxH + 10);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#f1e9d8';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    lines.forEach((line, i) => ctx.fillText(line, cx, boxY + 7 + i * lineH));
+  }
+  function renderCouncil() {
+    const canvas = document.getElementById('civCouncilCanvas');
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    if (!w || !h) return;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#231a12';
+    ctx.fillRect(0, 0, w, h);
+    const cx = w / 2, cy = h / 2;
+    const tableRx = Math.min(w, h) * 0.26, tableRy = tableRx * 0.6;
+    ctx.fillStyle = '#5a3e22';
+    ctx.strokeStyle = '#8a6a1e';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, tableRx, tableRy, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    const n = councilAttendees.length;
+    const seatRx = tableRx * 1.65, seatRy = tableRy * 1.85;
+    const seatH = Math.max(18, Math.min(w, h) * 0.1);
+    for (let i = 0; i < n; i++) {
+      const nation = councilAttendees[i];
+      const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+      const px = cx + Math.cos(angle) * seatRx;
+      const py = cy + Math.sin(angle) * seatRy;
+      const raceIdx = nation.raceTotals && nation.raceTotals[1] > nation.raceTotals[0] ? 1 : 0;
+      drawPersonSprite(ctx, px, py, RACES[raceIdx] || RACES[0], 0, seatH, px > cx);
+      drawLeaderHat(ctx, px, py - seatH - 1, nation.ideology, true);
+      ctx.font = `bold ${Math.max(9, seatH * 0.22)}px 'Nanum Myeongjo', Georgia, serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = (councilCurrentBubble && councilCurrentBubble.nationId === nation.id) ? '#FFCC11' : '#b9ac93';
+      ctx.fillText(nation.name, px, py + 4);
+
+      if (councilCurrentBubble && councilCurrentBubble.nationId === nation.id) {
+        drawCouncilBubble(ctx, px, py - seatH - 14, councilCurrentBubble.text, Math.min(220, w * 0.34), Math.max(10, seatH * 0.24));
+      }
+      if (councilInterruptBubble && councilInterruptBubble.nationId === nation.id) {
+        drawCouncilBubble(ctx, px, py - seatH - 14, councilInterruptBubble.text, Math.min(180, w * 0.26), Math.max(9, seatH * 0.2));
+      }
+    }
+
+    if (councilPhase === 'result') {
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, 0, w, h);
+      ctx.fillStyle = '#FFCC11';
+      ctx.font = `bold ${Math.max(14, h * 0.045)}px 'Nanum Myeongjo', Georgia, serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const lines = wrapCouncilText(ctx, councilOutcomeText, w * 0.8);
+      const lineH = h * 0.05;
+      const startY = cy - (lines.length - 1) * lineH / 2;
+      lines.forEach((line, i) => ctx.fillText(line, cx, startY + i * lineH));
     }
   }
 
@@ -1283,9 +1641,27 @@
       ctx.fill();
     }
   }
+  function drawStarCap(ctx, cx, cy, w, h, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy - h * 0.15, w * 0.46, h * 0.32, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(cx - w / 2, cy + h * 0.05, w, h * 0.12);
+    const starR = w * 0.15, starCx = cx, starCy = cy - h * 0.15;
+    ctx.beginPath();
+    for (let i = 0; i < 5; i++) {
+      const ang = -Math.PI / 2 + i * (2 * Math.PI / 5);
+      const ang2 = ang + Math.PI / 5;
+      ctx.lineTo(starCx + Math.cos(ang) * starR, starCy + Math.sin(ang) * starR);
+      ctx.lineTo(starCx + Math.cos(ang2) * starR * 0.42, starCy + Math.sin(ang2) * starR * 0.42);
+    }
+    ctx.closePath();
+    ctx.fillStyle = '#FF0045';
+    ctx.fill();
+  }
   const HAT_BY_IDEOLOGY = {
     군주제: drawCrown, 신정: drawMitre, 공화정: drawTopHat,
-    전체주의: drawPeakedCap, 부족연합: drawHeaddress,
+    전체주의: drawPeakedCap, 부족연합: drawHeaddress, 사회주의: drawStarCap,
   };
   function drawLeaderHat(ctx, cx, topY, ideology, isNational) {
     const draw = HAT_BY_IDEOLOGY[ideology];
@@ -1312,6 +1688,32 @@
     ctx.drawImage(img, -w / 2, -heightPx, w, heightPx);
     ctx.restore();
     return true;
+  }
+
+  // A brief procedural mushroom-cloud effect at a nuclear strike's site:
+  // grows quickly, holds, then fades over NUKE_EFFECT_DURATION seconds.
+  function drawMushroomCloud(ctx, cx, cy, progress) {
+    const grow = Math.min(1, progress / 0.35);
+    const fade = progress < 0.55 ? 1 : clamp(1 - (progress - 0.55) / 0.45, 0, 1);
+    if (fade <= 0) return;
+    const stemH = 70 * grow;
+    const capR = 30 * grow;
+    ctx.save();
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = '#6b5a4a';
+    ctx.fillRect(cx - 5 * grow, cy - stemH, 10 * grow, stemH);
+    ctx.fillStyle = '#e8dfce';
+    const puffs = [[0, 0, 1], [-0.5, 0.15, 0.72], [0.5, 0.15, 0.72], [-0.28, -0.35, 0.6], [0.28, -0.35, 0.6], [0, -0.55, 0.5]];
+    for (const [dx, dy, r] of puffs) {
+      ctx.beginPath();
+      ctx.arc(cx + dx * capR, cy - stemH + dy * capR, capR * r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = `rgba(255,120,40,${0.5 * fade})`;
+    ctx.beginPath();
+    ctx.arc(cx, cy - stemH * 0.25, capR * 0.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
   }
 
   function renderEntities() {
@@ -1386,6 +1788,13 @@
         ectx.fillStyle = '#FFCC11';
         ectx.fillText(nation.name, cx, labelY);
       }
+    }
+
+    for (let i = nukeEffects.length - 1; i >= 0; i--) {
+      const e = nukeEffects[i];
+      const age = simTime - e.time;
+      if (age > NUKE_EFFECT_DURATION) { nukeEffects.splice(i, 1); continue; }
+      drawMushroomCloud(ectx, e.x * sx, e.y * sy, age / NUKE_EFFECT_DURATION);
     }
   }
 
@@ -1513,8 +1922,11 @@
           }).join('')
         : '<tr><td colspan="4" class="civDiploEmpty">정착지가 없습니다.</td></tr>';
 
+      const specialty = n.specialty ? `${n.specialty.name} (${n.specialty.rarity})` : '-';
       return `<div class="civDiploNation">` +
-        `<div class="civDiploNationHead"><span class="civSwatch" style="background:${n.color}"></span><b>${n.name}</b> <span class="civMeta">(${n.dynasty})</span></div>` +
+        `<div class="civDiploNationHead"><span class="civSwatch" style="background:${n.color}"></span><b>${n.name}</b> <span class="civMeta">(${n.dynasty})</span>` +
+        (n.isHegemon ? '<span class="civHegemonBadge">👑 패권국</span>' : '') +
+        `</div>` +
         `<dl class="civDiploStatGrid">` +
         `<dt>이념</dt><dd>${n.ideology}</dd>` +
         `<dt>지도자</dt><dd>${LEADER_TITLE[n.ideology]} ${n.leader.name} · ${n.leader.personality}·${n.leader.philosophy}주의</dd>` +
@@ -1522,6 +1934,7 @@
         `<dt>문명</dt><dd>Lv.${n.civLevel} ${tier}</dd>` +
         `<dt>인구 · 정착지</dt><dd>${Math.round(n.totalPopulation)}명 · ${n.settlementIds.length}곳</dd>` +
         `<dt>문화</dt><dd>${n.culture ? n.culture.label : '-'}</dd>` +
+        `<dt>특산품</dt><dd>${specialty}</dd>` +
         `</dl>` +
         `<div class="civDiploSection"><div class="civDiploSectionTitle">외교 관계</div>` +
         `<div class="civRelRow">${summary}</div>` +
@@ -1673,6 +2086,7 @@
     });
     document.querySelectorAll('.civSpeedBtn').forEach((btn) => {
       btn.addEventListener('click', () => {
+        if (councilOpen) return; // speed is locked to 1x for the duration of a world council
         document.querySelectorAll('.civSpeedBtn').forEach((b) => b.classList.remove('active'));
         btn.classList.add('active');
         speedMultiplier = Number(btn.dataset.speed);
@@ -1685,10 +2099,12 @@
       seedInput.value = seed;
       generateWorld(seed);
       closeDiplomacyPanel();
+      if (councilOpen) closeWorldCouncil();
     });
     document.getElementById('civResetBtn').addEventListener('click', () => {
       generateWorld(currentSeed || randomSeedString());
       closeDiplomacyPanel();
+      if (councilOpen) closeWorldCouncil();
     });
 
     document.getElementById('civDiplomacyBtn').addEventListener('click', () => {
@@ -1701,6 +2117,10 @@
     document.querySelectorAll('.civModalTabBtn').forEach((btn) => {
       btn.addEventListener('click', () => setDiploTab(btn.dataset.diplotab));
     });
+
+    document.getElementById('civCouncilBtn').addEventListener('click', requestWorldCouncil);
+    document.getElementById('civCouncilCloseBtn').addEventListener('click', closeWorldCouncil);
+    window.addEventListener('resize', () => { if (councilOpen) resizeCouncilCanvas(); });
 
     const resourceSlider = document.getElementById('civResourceRateSlider');
     resourceSlider.addEventListener('input', () => { params.resourceRegrow = lerp(0.0008, 0.02, resourceSlider.value / 100); });
@@ -1737,6 +2157,10 @@
     renderTerrain();
     renderEntities();
     renderGraph();
+    if (councilOpen) {
+      tickCouncil(dt);
+      renderCouncil();
+    }
     requestAnimationFrame(frame);
   }
 
